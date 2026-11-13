@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `asimeow recommend`: finds build and dependency folders your config doesn't exclude yet,
+  using a built-in catalog of 36 project types, and shows how much space each would save.
+  Suggestions are split into "likely safe" and "check before adding" (generic names like
+  `build`, `dist`, `out`, or folders that git tracks). Package-manager and toolchain caches
+  (`~/.npm`, `~/.cargo/registry`, `~/.rustup`, …) are listed separately with their sizes.
+  Ends with a config snippet to paste. Read-only: it changes nothing.
 - `--visual` (alias `--tui`): a full-screen view of a scan. It shows live progress (with
   an estimate from the last run), space saved (total, this run, change since the last
   run), the excluded folders grouped by area and sorted by size (folding, `n` for only

@@ -29,7 +29,7 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
   - `-t, --threads <N>` worker threads for traversal
   - `--dry-run` report without writing marks
   - `--visual` / `--tui` full-screen view (needs a terminal; otherwise plain lines)
-  - Subcommands: `init`, `version`, `list`, `exclude`, `include`, `stats`
+  - Subcommands: `init`, `version`, `list`, `exclude`, `include`, `stats`, `recommend`
 - **Execution flow**:
   1. If a subcommand is provided, execute it immediately and exit.
   2. Otherwise, load configuration (auto-detect path) and the cache, pick a reporter (`CompactReporter` if stdout is a terminal, else `LogReporter`), call `report::run`, and save the returned cache (never after `--dry-run`).
@@ -86,11 +86,13 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
 - File: `src/walk.rs`. `walk(roots, threads, visit)` calls `visit(dir)` once per directory on `threads` scoped threads; `visit` returns the subdirectories to walk next.
 - The `Queue` is a `VecDeque<PathBuf>` plus a `pending` count (queued or being processed) under one `Mutex` with a `Condvar`. `finish` adds the children and retires the parent in one locked step, so the walk can't end while a worker still holds work. Shared by `scan` and the planned `recommend`.
 
-### Recommend agent (in progress)
+### Recommend agent
 
-- Files: `src/catalog.yaml` (built-in rules; each folder has a confidence, `high` or `check`), `src/catalog.rs` (`catalog()`, `CatalogRule`, `Confidence`), `src/recommend.rs`.
-- `find_candidates(config, catalog, threads) -> Findings`: walks the roots with `walk::walk`. In each folder, names from every matching config rule are covered; names from matching catalog rules that exist as folders, aren't covered and carry no exclusion mark are `Candidate`s (with the config rule that has the same `file_match`, if any). Covered folders and candidates are not walked into. Read-only.
-- Still to come (see `_docs/wip/recommend-plan.md`): sizes, git signal, skipping package-manager caches, the report and the `recommend` subcommand.
+- Files: `src/catalog.yaml` (built-in rules; each folder has a confidence, `high` or `check`), `src/catalog.rs` (`catalog()`, `CatalogRule`, `Confidence`), `src/recommend.rs`. Read-only throughout.
+- `find_candidates(config, catalog, threads, home) -> Findings`: walks the roots with `walk::walk`. In each folder, names from every matching config rule are covered; names from matching catalog rules that exist as folders, aren't covered and carry no exclusion mark are `Candidate`s (with the config rule that has the same `file_match`, if any). Covered folders and candidates are not walked into. Folders in `TOOL_CACHES` (relative to `home`) are recorded and not walked: their packages' `build` folders aren't the user's.
+- `git_status(path)`: `git check-ignore` then `git ls-files --error-unmatch` → `Ignored`, `Tracked`, `Untracked` or `NoRepo`.
+- `recommend(...) -> Report`: finds candidates, measures them and the caches in parallel (`scan::folder_size`), asks git about each candidate, groups by (folder name, catalog rule) into `Suggestion`s sorted by size. A group becomes `Check` if any of its folders is tracked by git.
+- Output: `report::recommend_text` (sections, caches, snippet) and `report::recommend_snippet` (likely-safe changes as YAML in the config's style; folders to check only in a closing comment, so the snippet stays valid).
 
 ### Cache agent
 
@@ -167,6 +169,7 @@ rules:
 - `./asimeow exclude <path>` — Exclude a path from backups
 - `./asimeow include <path>` — Include a path in backups
 - `./asimeow stats` — Space saved and largest excluded folders, from the cache
+- `./asimeow recommend` — Build folders the config misses, with sizes and a snippet (read-only)
 
 ### Dependencies
 

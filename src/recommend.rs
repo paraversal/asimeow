@@ -6,18 +6,47 @@
 //! *covered*. The names of every matching catalog rule, minus covered ones, that exist as
 //! folders are *candidates*. Neither is walked into: they're generated, and walking
 //! `node_modules` would find thousands of nested `package.json`.
+//!
+//! Package-manager caches ([`TOOL_CACHES`]) are not searched either: every cached package
+//! has its own `package.json`, but its `build` folder is part of the published package,
+//! not the user's project. They're reported as whole folders instead.
 
 use crate::catalog::{CatalogRule, Confidence};
 use crate::config::{expand_tilde, Config, Rule};
 use crate::rules::Matcher;
+use crate::scan;
 use crate::tm;
 use crate::walk;
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::thread;
+use std::time::{Duration, Instant};
+
+/// Package-manager and toolchain caches, relative to the home folder. Everything in them
+/// can be downloaded again; they don't fit the rule model (a fixed path, not a folder next
+/// to a marker file), so they're listed separately.
+pub const TOOL_CACHES: &[&str] = &[
+    ".bun/install/cache",
+    ".npm",
+    ".pnpm-store",
+    "Library/pnpm/store",
+    ".yarn/berry/cache",
+    ".cargo/registry",
+    ".cargo/git",
+    ".rustup",
+    ".gradle/caches",
+    ".m2/repository",
+    "go/pkg/mod",
+    ".pub-cache",
+    ".nuget/packages",
+    ".cache",
+    "Library/Caches",
+];
 
 /// A folder the catalog says is generated, which the config doesn't exclude.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,14 +69,17 @@ pub struct Findings {
     /// Folders the catalog names that already carry an exclusion mark (set by hand, or by
     /// a tool such as cargo for `target`): nothing more to save.
     pub already_excluded: usize,
+    /// Tool caches the walk reached (see [`TOOL_CACHES`]), sorted.
+    pub caches: Vec<PathBuf>,
     pub dirs: usize,
 }
 
-/// Walks the config's roots and collects the candidates.
+/// Walks the config's roots and collects the candidates. `home` locates the tool caches.
 pub fn find_candidates(
     config: &Config,
     catalog: &[CatalogRule],
     threads: usize,
+    home: Option<&Path>,
 ) -> Result<Findings> {
     let mut roots = Vec::new();
     for root in &config.roots {
@@ -56,14 +88,17 @@ pub fn find_candidates(
             roots.push(path);
         }
     }
-    let finder = Finder::new(config, catalog);
+    let finder = Finder::new(config, catalog, home);
     walk::walk(roots, threads, |dir| finder.visit(dir));
 
     let mut candidates = finder.candidates.into_inner().unwrap();
     candidates.sort_by(|a, b| a.path.cmp(&b.path));
+    let mut caches = finder.found_caches.into_inner().unwrap();
+    caches.sort();
     Ok(Findings {
         candidates,
         already_excluded: finder.already_excluded.into_inner(),
+        caches,
         dirs: finder.dirs.into_inner(),
     })
 }
@@ -75,13 +110,15 @@ struct Finder<'a> {
     catalog: HashMap<&'a str, &'a CatalogRule>,
     /// Lowercase `file_match` → name of the first config rule with it.
     config_by_marker: HashMap<String, String>,
+    caches: HashSet<PathBuf>,
+    found_caches: Mutex<Vec<PathBuf>>,
     candidates: Mutex<Vec<Candidate>>,
     already_excluded: AtomicUsize,
     dirs: AtomicUsize,
 }
 
 impl<'a> Finder<'a> {
-    fn new(config: &Config, catalog: &'a [CatalogRule]) -> Self {
+    fn new(config: &Config, catalog: &'a [CatalogRule], home: Option<&Path>) -> Self {
         let mut config_by_marker = HashMap::new();
         for rule in &config.rules {
             config_by_marker
@@ -93,6 +130,10 @@ impl<'a> Finder<'a> {
             catalog_rules: Matcher::new(catalog.iter().map(CatalogRule::to_rule).collect(), &[]),
             catalog: catalog.iter().map(|r| (r.name.as_str(), r)).collect(),
             config_by_marker,
+            caches: home
+                .map(|h| TOOL_CACHES.iter().map(|c| h.join(c)).collect())
+                .unwrap_or_default(),
+            found_caches: Mutex::new(Vec::new()),
             candidates: Mutex::new(Vec::new()),
             already_excluded: AtomicUsize::new(0),
             dirs: AtomicUsize::new(0),
@@ -105,6 +146,10 @@ impl<'a> Finder<'a> {
             if self.config_rules.is_ignored(&name.to_string_lossy()) {
                 return Vec::new();
             }
+        }
+        if self.caches.contains(dir) {
+            self.found_caches.lock().unwrap().push(dir.to_path_buf());
+            return Vec::new();
         }
         self.dirs.fetch_add(1, Ordering::Relaxed);
         let Ok(entries) = fs::read_dir(dir) else {
@@ -172,4 +217,179 @@ impl<'a> Finder<'a> {
                 .cloned(),
         });
     }
+}
+
+/// What git says about a candidate folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Git {
+    /// Ignored by the repository: almost certainly generated.
+    Ignored,
+    /// Contains files the repository tracks: real source, at least partly.
+    Tracked,
+    /// In a repository, neither ignored nor tracked.
+    Untracked,
+    /// Not in a repository (or git isn't available).
+    NoRepo,
+}
+
+/// Asks git about `path`: `check-ignore`, then `ls-files` if it isn't ignored.
+pub fn git_status(path: &Path) -> Git {
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+        return Git::NoRepo;
+    };
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(parent)
+            .args(args)
+            .arg("--")
+            .arg(name)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .ok()
+            .and_then(|status| status.code())
+    };
+    match git(&["check-ignore", "-q"]) {
+        Some(0) => Git::Ignored,
+        Some(1) => match git(&["ls-files", "--error-unmatch"]) {
+            Some(0) => Git::Tracked,
+            _ => Git::Untracked,
+        },
+        _ => Git::NoRepo,
+    }
+}
+
+/// One suggested change: a folder name of one catalog rule, with every place it was found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Suggestion {
+    pub folder: String,
+    pub catalog_rule: String,
+    /// The catalog rule's marker, for a new rule.
+    pub file_match: String,
+    /// Add to this config rule; `None` means a new rule.
+    pub config_rule: Option<String>,
+    /// `Check` if the catalog says so or git tracks any of the folders.
+    pub confidence: Confidence,
+    pub bytes: u64,
+    /// Biggest first.
+    pub paths: Vec<(PathBuf, u64)>,
+    /// Folders that contain files git tracks.
+    pub tracked: Vec<PathBuf>,
+}
+
+/// A package-manager or toolchain cache found under the roots.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolCache {
+    pub path: PathBuf,
+    pub bytes: u64,
+    /// Already excluded from Time Machine (its own mark, a parent, or a system rule).
+    pub excluded: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Report {
+    /// Biggest first.
+    pub suggestions: Vec<Suggestion>,
+    /// Biggest first.
+    pub caches: Vec<ToolCache>,
+    pub already_excluded: usize,
+    pub dirs: usize,
+    pub elapsed: Duration,
+}
+
+/// Finds candidates, measures them and the tool caches, asks git about each candidate and
+/// groups the result into suggestions. Read-only.
+pub fn recommend(
+    config: &Config,
+    catalog: &[CatalogRule],
+    threads: usize,
+    home: Option<&Path>,
+) -> Result<Report> {
+    let started = Instant::now();
+    let findings = find_candidates(config, catalog, threads, home)?;
+    let checked = parallel_map(&findings.candidates, threads, |c| {
+        (scan::folder_size(&c.path), git_status(&c.path))
+    });
+    let mut caches = parallel_map(&findings.caches, threads, |path| ToolCache {
+        path: path.clone(),
+        bytes: scan::folder_size(path),
+        excluded: tm::has_exclusion_mark(path) || tm::is_excluded(path),
+    });
+    caches.sort_by(|a, b| b.bytes.cmp(&a.bytes).then(a.path.cmp(&b.path)));
+
+    let markers: HashMap<&str, &str> = catalog
+        .iter()
+        .map(|r| (r.name.as_str(), r.file_match.as_str()))
+        .collect();
+    let mut groups: Vec<Suggestion> = Vec::new();
+    for (candidate, (bytes, git)) in findings.candidates.iter().zip(checked) {
+        let index = match groups
+            .iter()
+            .position(|g| g.folder == candidate.folder && g.catalog_rule == candidate.catalog_rule)
+        {
+            Some(index) => index,
+            None => {
+                groups.push(Suggestion {
+                    folder: candidate.folder.clone(),
+                    catalog_rule: candidate.catalog_rule.clone(),
+                    file_match: markers
+                        .get(candidate.catalog_rule.as_str())
+                        .map_or_else(String::new, |m| m.to_string()),
+                    config_rule: candidate.config_rule.clone(),
+                    confidence: candidate.confidence,
+                    bytes: 0,
+                    paths: Vec::new(),
+                    tracked: Vec::new(),
+                });
+                groups.len() - 1
+            }
+        };
+        let group = &mut groups[index];
+        group.bytes += bytes;
+        group.paths.push((candidate.path.clone(), bytes));
+        if git == Git::Tracked {
+            group.tracked.push(candidate.path.clone());
+            group.confidence = Confidence::Check;
+        }
+    }
+    for group in &mut groups {
+        group
+            .paths
+            .sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    }
+    groups.sort_by(|a, b| b.bytes.cmp(&a.bytes).then(a.folder.cmp(&b.folder)));
+
+    Ok(Report {
+        suggestions: groups,
+        caches,
+        already_excluded: findings.already_excluded,
+        dirs: findings.dirs,
+        elapsed: started.elapsed(),
+    })
+}
+
+/// `f` over `items` on `threads` threads, results in the order of `items`.
+fn parallel_map<T: Sync, R: Send>(
+    items: &[T],
+    threads: usize,
+    f: impl Fn(&T) -> R + Sync,
+) -> Vec<R> {
+    let next = AtomicUsize::new(0);
+    let results = Mutex::new(Vec::with_capacity(items.len()));
+    thread::scope(|scope| {
+        for _ in 0..threads.max(1) {
+            scope.spawn(|| loop {
+                let index = next.fetch_add(1, Ordering::Relaxed);
+                let Some(item) = items.get(index) else {
+                    break;
+                };
+                let result = f(item);
+                results.lock().unwrap().push((index, result));
+            });
+        }
+    });
+    let mut results = results.into_inner().unwrap();
+    results.sort_by_key(|(index, _)| *index);
+    results.into_iter().map(|(_, result)| result).collect()
 }

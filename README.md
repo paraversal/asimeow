@@ -102,6 +102,9 @@ The executable will be available at `target/release/asimeow`.
 # Show how much space the exclusions save, from the last scan (no new scan)
 ./asimeow stats
 
+# Suggest build folders your config misses, with a snippet to add (read-only)
+./asimeow recommend
+
 # Create a default configuration file in ~/.config/asimeow/
 ./asimeow init
 
@@ -373,6 +376,59 @@ Largest:
    514 MB  ~/projects/web/node_modules  node
    388 MB  ~/tools/editor-plugins/node_modules  node
 ```
+
+### Recommend Command Output
+
+`asimeow recommend` walks your roots with your config plus a built-in catalog of project
+types (`src/catalog.yaml`) and lists the build folders your config doesn't exclude yet.
+It changes nothing:
+
+```
+Scanned 17,158 folders in 1.5s.
+
+Could save 214 MB more in 62 folders:
+
+  Likely safe
+    14.9 MB  .Rproj.user           12 folders  new rule "r"
+             e.g. ~/projects/stats/.Rproj.user
+    11.1 MB  cmake-build-debug     13 folders  new rule "cmake"
+             e.g. ~/projects/engine/cmake-build-debug
+    12.1 KB  .pytest_cache           1 folder  add to rule "python"
+             e.g. ~/projects/api/.pytest_cache
+
+  Check before adding (generic names, or tracked by git)
+     175 MB  out                   18 folders  add to rule "node"
+             e.g. ~/projects/extension/out
+
+Tool caches (downloadable again; exclude one with `asimeow exclude <path>`):
+     1.2 GB  ~/.rustup
+     309 MB  ~/.bun/install/cache
+     108 MB  ~/.cargo/registry  (already excluded)
+
+Add to ~/.config/asimeow/config.yaml:
+
+# in rule "python", add under exclusions:
+  - .pytest_cache
+
+- name: r
+  file_match: '*.Rproj'
+  exclusions:
+  - .Rproj.user
+
+- name: cmake
+  file_match: CMakeLists.txt
+  exclusions:
+  - cmake-build-debug
+
+# Check before adding: out (node)
+```
+
+- **Likely safe**: names that tools generate (`.next`, `.gradle`, `.mypy_cache`, …).
+- **Check before adding**: generic names (`build`, `dist`, `out`, `vendor`) that are sometimes
+  real source, and any folder that contains files git tracks (listed as "tracked by git").
+- Folders inside package-manager caches are never suggested; the caches themselves are listed
+  instead, since a rule can't name a fixed path.
+- With `-v`, every folder is listed instead of one example.
 
 ### List Command Output
 

@@ -2,7 +2,7 @@ use anyhow::Result;
 use asimeow::cache::{self, Cache};
 use asimeow::report::{self, CompactReporter, LogReporter};
 use asimeow::tui::{App, TuiReporter};
-use asimeow::{config, explorer, scan};
+use asimeow::{config, explorer, recommend, scan};
 use clap::{Parser, Subcommand};
 use std::io::{self, IsTerminal};
 
@@ -71,6 +71,9 @@ enum Commands {
     },
     /// Show how much space the exclusions save, from the last scan (no new scan)
     Stats,
+    /// Suggest build folders your config doesn't exclude yet, with the space they'd save.
+    /// Read-only: prints a snippet to add to the config, changes nothing
+    Recommend,
 }
 
 fn main() -> Result<()> {
@@ -101,6 +104,19 @@ fn main() -> Result<()> {
                     .unwrap_or_default();
                 let home = dirs::home_dir();
                 print!("{}", report::stats(&cache, cache::now(), home.as_deref()));
+                return Ok(());
+            }
+            Commands::Recommend => {
+                let explicit = (args.config != "config.yaml").then_some(args.config.as_str());
+                let (config, config_path) = config::load_config(explicit, args.verbose)?;
+                println!("Using configuration: {}", config_path);
+                let home = dirs::home_dir();
+                let catalog = asimeow::catalog::catalog();
+                let found = recommend::recommend(&config, &catalog, args.threads, home.as_deref())?;
+                print!(
+                    "{}",
+                    report::recommend_text(&found, home.as_deref(), &config_path, args.verbose)
+                );
                 return Ok(());
             }
         }

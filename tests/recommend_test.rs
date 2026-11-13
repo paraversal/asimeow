@@ -1,11 +1,16 @@
 use anyhow::Result;
 use asimeow::catalog::{catalog, Confidence};
 use asimeow::config::{default_rules, Config, Root, Rule};
-use asimeow::recommend::{find_candidates, Candidate, Findings};
+use asimeow::recommend::{
+    find_candidates, git_status, recommend, Candidate, Findings, Git, Report, Suggestion, ToolCache,
+};
+use asimeow::report::{recommend_snippet, recommend_text};
 use asimeow::tm;
 use std::collections::HashSet;
 use std::fs::{self, File};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::Duration;
 use tempfile::tempdir;
 
 #[test]
@@ -57,7 +62,7 @@ fn node_rule() -> Rule {
 }
 
 fn find(config: &Config) -> Result<Findings> {
-    find_candidates(config, &catalog(), 4)
+    find_candidates(config, &catalog(), 4, None)
 }
 
 fn folders(candidates: &[Candidate]) -> Vec<&str> {
@@ -146,4 +151,221 @@ fn test_ignored_folders_are_skipped() -> Result<()> {
 
     assert!(findings.candidates.is_empty());
     Ok(())
+}
+
+#[test]
+fn test_tool_caches_are_listed_not_searched() -> Result<()> {
+    let home = tempdir()?;
+    let cached = home.path().join(".npm").join("some-package");
+    fs::create_dir_all(cached.join("build"))?;
+    File::create(cached.join("package.json"))?;
+
+    let cfg = config(home.path(), vec![node_rule()], &[]);
+    let findings = find_candidates(&cfg, &catalog(), 4, Some(home.path()))?;
+
+    assert!(
+        findings.candidates.is_empty(),
+        "nothing suggested inside a cache"
+    );
+    assert_eq!(findings.caches, vec![home.path().join(".npm")]);
+    Ok(())
+}
+
+fn git(dir: &Path, args: &[&str]) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.name=test", "-c", "user.email=test@example.com"])
+        .args(args)
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+/// A git repository with an ignored `.next` (1000 bytes) and a committed `dist` (500
+/// bytes), or None if git isn't available.
+fn repo_with_build_folders() -> Result<Option<tempfile::TempDir>> {
+    let temp_dir = tempdir()?;
+    let app = temp_dir.path().join("app");
+    fs::create_dir_all(app.join(".next"))?;
+    fs::create_dir_all(app.join("dist"))?;
+    File::create(app.join("package.json"))?;
+    fs::write(app.join(".next").join("page.js"), vec![0u8; 1000])?;
+    fs::write(app.join("dist").join("lib.js"), vec![0u8; 500])?;
+    fs::write(app.join(".gitignore"), ".next/\n")?;
+    if !git(&app, &["init", "-q"]) {
+        return Ok(None);
+    }
+    assert!(git(&app, &["add", "."]));
+    assert!(git(&app, &["commit", "-q", "-m", "init"]));
+    Ok(Some(temp_dir))
+}
+
+#[test]
+fn test_git_status() -> Result<()> {
+    let Some(temp_dir) = repo_with_build_folders()? else {
+        return Ok(()); // no git here
+    };
+    let app = temp_dir.path().join("app");
+    assert_eq!(git_status(&app.join(".next")), Git::Ignored);
+    assert_eq!(git_status(&app.join("dist")), Git::Tracked);
+    let outside = tempdir()?;
+    fs::create_dir(outside.path().join("build"))?;
+    assert_eq!(git_status(&outside.path().join("build")), Git::NoRepo);
+    Ok(())
+}
+
+#[test]
+fn test_recommend_sizes_groups_and_flags_tracked_folders() -> Result<()> {
+    let Some(temp_dir) = repo_with_build_folders()? else {
+        return Ok(());
+    };
+    // A second project outside the repo with a bigger .next
+    let other = temp_dir.path().join("other");
+    fs::create_dir_all(other.join(".next"))?;
+    File::create(other.join("package.json"))?;
+    fs::write(other.join(".next").join("big.js"), vec![0u8; 3000])?;
+
+    let report = recommend(
+        &config(temp_dir.path(), vec![node_rule()], &[]),
+        &catalog(),
+        4,
+        None,
+    )?;
+
+    let next = &report.suggestions[0];
+    assert_eq!(next.folder, ".next");
+    assert_eq!(next.bytes, 4000);
+    assert_eq!(next.confidence, Confidence::High);
+    assert_eq!(
+        next.paths,
+        vec![
+            (other.join(".next"), 3000),
+            (temp_dir.path().join("app").join(".next"), 1000)
+        ]
+    );
+    let dist = &report.suggestions[1];
+    assert_eq!((dist.folder.as_str(), dist.bytes), ("dist", 500));
+    assert_eq!(dist.confidence, Confidence::Check);
+    assert_eq!(dist.tracked, vec![temp_dir.path().join("app").join("dist")]);
+    Ok(())
+}
+
+fn suggestion(
+    folder: &str,
+    rule: &str,
+    marker: &str,
+    config_rule: Option<&str>,
+    confidence: Confidence,
+    bytes: u64,
+    path: &str,
+) -> Suggestion {
+    Suggestion {
+        folder: folder.to_string(),
+        catalog_rule: rule.to_string(),
+        file_match: marker.to_string(),
+        config_rule: config_rule.map(str::to_string),
+        confidence,
+        bytes,
+        paths: vec![(PathBuf::from(path), bytes)],
+        tracked: vec![],
+    }
+}
+
+fn sample_report() -> Report {
+    Report {
+        suggestions: vec![
+            suggestion(
+                ".next",
+                "node",
+                "package.json",
+                Some("node"),
+                Confidence::High,
+                2_900_000_000,
+                "/h/web/.next",
+            ),
+            suggestion(
+                ".Rproj.user",
+                "r",
+                "*.Rproj",
+                None,
+                Confidence::High,
+                14_900_000,
+                "/h/stats/.Rproj.user",
+            ),
+            suggestion(
+                "out",
+                "node",
+                "package.json",
+                Some("node"),
+                Confidence::Check,
+                175_000_000,
+                "/h/ext/out",
+            ),
+        ],
+        caches: vec![ToolCache {
+            path: PathBuf::from("/h/.npm"),
+            bytes: 6_000_000,
+            excluded: false,
+        }],
+        already_excluded: 2,
+        dirs: 17_158,
+        elapsed: Duration::from_millis(1500),
+    }
+}
+
+#[test]
+fn test_recommend_text() {
+    let text = recommend_text(
+        &sample_report(),
+        Some(Path::new("/h")),
+        "~/.config/asimeow/config.yaml",
+        false,
+    );
+    assert_eq!(
+        text,
+        "Scanned 17,158 folders in 1.5s.\n\
+         \n\
+         Could save 3.1 GB more in 3 folders:\n\
+         \n  Likely safe\n\
+         \x20    2.9 GB  .next                   1 folder  add to rule \"node\"\n\
+         \x20            e.g. ~/web/.next\n\
+         \x20   14.9 MB  .Rproj.user             1 folder  new rule \"r\"\n\
+         \x20            e.g. ~/stats/.Rproj.user\n\
+         \n  Check before adding (generic names, or tracked by git)\n\
+         \x20    175 MB  out                     1 folder  add to rule \"node\"\n\
+         \x20            e.g. ~/ext/out\n\
+         \n\
+         Tool caches (downloadable again; exclude one with `asimeow exclude <path>`):\n\
+         \x20    6.0 MB  ~/.npm\n\
+         \n\
+         2 more folders that the catalog knows are already excluded by other means (like cargo marking target).\n\
+         \n\
+         Add to ~/.config/asimeow/config.yaml:\n\
+         \n\
+         # in rule \"node\", add under exclusions:\n\
+         \x20 - .next\n\
+         \n\
+         - name: r\n\
+         \x20 file_match: '*.Rproj'\n\
+         \x20 exclusions:\n\
+         \x20 - .Rproj.user\n\
+         \n\
+         # Check before adding: out (node)\n"
+    );
+}
+
+#[test]
+fn test_new_rules_in_the_snippet_are_valid_config() {
+    let report = Report {
+        suggestions: sample_report()
+            .suggestions
+            .into_iter()
+            .filter(|s| s.config_rule.is_none())
+            .collect(),
+        ..Report::default()
+    };
+    let rules: Vec<Rule> = serde_yaml::from_str(&recommend_snippet(&report)).unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].file_match, "*.Rproj");
+    assert_eq!(rules[0].exclusions, vec![".Rproj.user"]);
 }

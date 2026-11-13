@@ -8,7 +8,9 @@
 //! already-excluded folders, unreadable folders, folder sizes and traces.
 
 use crate::cache::Cache;
+use crate::catalog::Confidence;
 use crate::config::Config;
+use crate::recommend::{Report, Suggestion};
 use crate::scan::{self, Event, Kind, Options, Progress, Summary};
 use anyhow::Result;
 use std::io::Write;
@@ -369,6 +371,156 @@ pub fn stats(cache: &Cache, now: u64, home: Option<&Path>) -> String {
         );
     }
     out
+}
+
+/// What `asimeow recommend` prints: the suggestions (likely safe first, then the ones to
+/// check), the tool caches, and a config snippet to paste.
+pub fn recommend_text(
+    report: &Report,
+    home: Option<&Path>,
+    config_path: &str,
+    verbose: bool,
+) -> String {
+    let short = |path: &Path| match home.and_then(|h| path.strip_prefix(h).ok()) {
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
+    };
+    let mut out = format!(
+        "Scanned {} in {:.1}s.\n\n",
+        counted(report.dirs, "folder", "folders"),
+        report.elapsed.as_secs_f64()
+    );
+
+    if report.suggestions.is_empty() {
+        out += "Nothing to add: your config already covers every build folder the catalog knows.\n";
+    } else {
+        let total: u64 = report.suggestions.iter().map(|s| s.bytes).sum();
+        let folders: usize = report.suggestions.iter().map(|s| s.paths.len()).sum();
+        out += &format!(
+            "Could save {} more in {}:\n",
+            format_bytes(total),
+            counted(folders, "folder", "folders")
+        );
+        for (title, confidence) in [
+            ("Likely safe", Confidence::High),
+            (
+                "Check before adding (generic names, or tracked by git)",
+                Confidence::Check,
+            ),
+        ] {
+            let group: Vec<&Suggestion> = report
+                .suggestions
+                .iter()
+                .filter(|s| s.confidence == confidence)
+                .collect();
+            if group.is_empty() {
+                continue;
+            }
+            out += &format!("\n  {title}\n");
+            for s in group {
+                let target = match &s.config_rule {
+                    Some(rule) => format!("add to rule \"{rule}\""),
+                    None => format!("new rule \"{}\"", s.catalog_rule),
+                };
+                let example = s.paths.first().map(|(p, _)| short(p)).unwrap_or_default();
+                out += &format!(
+                    "  {:>9}  {:<20} {:>11}  {target}\n",
+                    format_bytes(s.bytes),
+                    s.folder,
+                    counted(s.paths.len(), "folder", "folders"),
+                );
+                if verbose {
+                    for (path, bytes) in &s.paths {
+                        out += &format!("  {:>9}    {}\n", format_bytes(*bytes), short(path));
+                    }
+                } else {
+                    out += &format!("             e.g. {example}\n");
+                }
+                for path in &s.tracked {
+                    out += &format!("             tracked by git: {}\n", short(path));
+                }
+            }
+        }
+    }
+
+    if !report.caches.is_empty() {
+        out += "\nTool caches (downloadable again; exclude one with `asimeow exclude <path>`):\n";
+        for cache in &report.caches {
+            out += &format!(
+                "  {:>9}  {}{}\n",
+                format_bytes(cache.bytes),
+                short(&cache.path),
+                if cache.excluded {
+                    "  (already excluded)"
+                } else {
+                    ""
+                }
+            );
+        }
+    }
+    if report.already_excluded > 0 {
+        let n = report.already_excluded;
+        out += &format!(
+            "\n{} that the catalog knows {} already excluded by other means (like cargo marking target).\n",
+            counted(n, "more folder", "more folders"),
+            if n == 1 { "is" } else { "are" }
+        );
+    }
+
+    if !report.suggestions.is_empty() {
+        out += &format!("\nAdd to {config_path}:\n\n{}", recommend_snippet(report));
+    }
+    out
+}
+
+/// The config change for every likely-safe suggestion, as YAML in the config's own style.
+/// Folders to check are only named in a closing comment, so the snippet stays valid YAML
+/// (a new rule never ends up with an empty `exclusions`).
+pub fn recommend_snippet(report: &Report) -> String {
+    let mut existing: Vec<(&str, String)> = Vec::new();
+    let mut new: Vec<(&str, &str, String)> = Vec::new();
+    let mut to_check: Vec<String> = Vec::new();
+    for s in &report.suggestions {
+        if s.confidence == Confidence::Check {
+            let rule = s.config_rule.as_deref().unwrap_or(&s.catalog_rule);
+            to_check.push(format!("{} ({rule})", s.folder));
+            continue;
+        }
+        let line = format!("  - {}\n", s.folder);
+        match &s.config_rule {
+            Some(rule) => match existing.iter_mut().find(|(r, _)| r == rule) {
+                Some((_, lines)) => lines.push_str(&line),
+                None => existing.push((rule, line)),
+            },
+            None => match new.iter_mut().find(|(r, _, _)| *r == s.catalog_rule) {
+                Some((_, _, lines)) => lines.push_str(&line),
+                None => new.push((&s.catalog_rule, &s.file_match, line)),
+            },
+        }
+    }
+    let mut out = String::new();
+    for (rule, lines) in existing {
+        out += &format!("# in rule \"{rule}\", add under exclusions:\n{lines}\n");
+    }
+    for (rule, file_match, lines) in new {
+        out += &format!(
+            "- name: {rule}\n  file_match: {}\n  exclusions:\n{lines}\n",
+            yaml_scalar(file_match)
+        );
+    }
+    if !to_check.is_empty() {
+        out += &format!("# Check before adding: {}\n", to_check.join(", "));
+    }
+    out
+}
+
+/// Quotes a YAML value that would otherwise be read as something else (`*.csproj`).
+fn yaml_scalar(value: &str) -> String {
+    if value.starts_with(['*', '&', '!', '[', '{', '?', '|', '>', '%', '@', '`']) {
+        format!("'{value}'")
+    } else {
+        value.to_string()
+    }
 }
 
 /// `45` → `just now`, `7200` → `2 h ago`, `200000` → `2 days ago`.
