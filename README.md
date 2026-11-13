@@ -105,6 +105,10 @@ The executable will be available at `target/release/asimeow`.
 # Suggest build folders your config misses, with a snippet to add (read-only)
 ./asimeow recommend
 
+# Add the likely-safe suggestions to your config and exclude those folders now
+./asimeow recommend --apply --dry-run   # preview first
+./asimeow recommend --apply
+
 # Create a default configuration file in ~/.config/asimeow/
 ./asimeow init
 
@@ -407,22 +411,8 @@ Tool caches (downloadable again; exclude one with `asimeow exclude <path>`):
      309 MB  ~/.bun/install/cache
      108 MB  ~/.cargo/registry  (already excluded)
 
-Add to ~/.config/asimeow/config.yaml:
-
-# in rule "python", add under exclusions:
-  - .pytest_cache
-
-- name: r
-  file_match: '*.Rproj'
-  exclusions:
-  - .Rproj.user
-
-- name: cmake
-  file_match: CMakeLists.txt
-  exclusions:
-  - cmake-build-debug
-
-# Check before adding: out (node)
+→ Apply the likely-safe ones with asimeow recommend --apply (26 folders, 26.0 MB).
+  They're added to your config and excluded right away. Preview with --dry-run; -v prints the config snippet instead.
 ```
 
 - **Likely safe**: names that tools generate (`.next`, `.gradle`, `.mypy_cache`, …).
@@ -430,7 +420,27 @@ Add to ~/.config/asimeow/config.yaml:
   real source, and any folder that contains files git tracks (listed as "tracked by git").
 - Folders inside package-manager caches are never suggested; the caches themselves are listed
   instead, since a rule can't name a fixed path.
-- With `-v`, every folder is listed instead of one example.
+- With `-v`, every folder is listed instead of one example, and the output ends with a config
+  snippet for adding the suggestions by hand.
+- In a terminal the output is colored (`NO_COLOR` turns that off).
+
+`asimeow recommend --apply` makes the "likely safe" changes for you: it adds the folders
+and rules to your config and excludes the folders it found, so you don't have to wait for
+the next scan. "Check before adding" suggestions and tool caches are never applied.
+
+```
+Added to ~/.config/asimeow/config.yaml (previous version: ~/.config/asimeow/config.yaml.bak):
+  new rule "r" (*.Rproj): .Rproj.user
+  new rule "cmake" (CMakeLists.txt): cmake-build-debug
+  new rule "jupyter" (*.ipynb): .ipynb_checkpoints
+  rule "python": .pytest_cache
+Excluded 34 folders (29.1 MB).
+```
+
+The config is edited as text, so comments and layout stay as they are. Each edit is checked
+by reading the result back: if it would change anything else, nothing is written. Rules
+whose `exclusions` span several lines in `[...]` form aren't supported and are reported
+as an error. Add `--dry-run` to see the changes without writing anything.
 
 ### List Command Output
 

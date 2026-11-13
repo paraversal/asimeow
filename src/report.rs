@@ -10,7 +10,7 @@
 use crate::cache::Cache;
 use crate::catalog::Confidence;
 use crate::config::Config;
-use crate::recommend::{Report, Suggestion};
+use crate::recommend::{Applied, Report, Suggestion};
 use crate::scan::{self, Event, Kind, Options, Progress, Summary};
 use anyhow::Result;
 use std::io::Write;
@@ -373,23 +373,59 @@ pub fn stats(cache: &Cache, now: u64, home: Option<&Path>) -> String {
     out
 }
 
+/// ANSI styling for plain-text reports; with color off, text passes through unchanged.
+#[derive(Debug, Clone, Copy)]
+pub struct Paint(pub bool);
+
+impl Paint {
+    fn code(self, code: &str, text: &str) -> String {
+        if self.0 {
+            format!("\x1b[{code}m{text}\x1b[0m")
+        } else {
+            text.to_string()
+        }
+    }
+    pub fn bold(self, text: &str) -> String {
+        self.code("1", text)
+    }
+    pub fn dim(self, text: &str) -> String {
+        self.code("2", text)
+    }
+    pub fn green(self, text: &str) -> String {
+        self.code("1;32", text)
+    }
+    pub fn yellow(self, text: &str) -> String {
+        self.code("1;33", text)
+    }
+    pub fn red(self, text: &str) -> String {
+        self.code("1;31", text)
+    }
+    pub fn cyan(self, text: &str) -> String {
+        self.code("36", text)
+    }
+}
+
 /// What `asimeow recommend` prints: the suggestions (likely safe first, then the ones to
-/// check), the tool caches, and a config snippet to paste.
+/// check), the tool caches, and how to apply them. `applying` leaves out the hint (the
+/// `--apply` result follows instead); `verbose` lists every folder and prints the config
+/// snippet for adding them by hand.
 pub fn recommend_text(
     report: &Report,
     home: Option<&Path>,
     config_path: &str,
     verbose: bool,
+    applying: bool,
+    paint: Paint,
 ) -> String {
     let short = |path: &Path| match home.and_then(|h| path.strip_prefix(h).ok()) {
         Some(rest) => format!("~/{}", rest.display()),
         None => path.display().to_string(),
     };
-    let mut out = format!(
-        "Scanned {} in {:.1}s.\n\n",
+    let mut out = paint.dim(&format!(
+        "Scanned {} in {:.1}s.",
         counted(report.dirs, "folder", "folders"),
         report.elapsed.as_secs_f64()
-    );
+    )) + "\n\n";
 
     if report.suggestions.is_empty() {
         out += "Nothing to add: your config already covers every build folder the catalog knows.\n";
@@ -397,14 +433,19 @@ pub fn recommend_text(
         let total: u64 = report.suggestions.iter().map(|s| s.bytes).sum();
         let folders: usize = report.suggestions.iter().map(|s| s.paths.len()).sum();
         out += &format!(
-            "Could save {} more in {}:\n",
-            format_bytes(total),
-            counted(folders, "folder", "folders")
+            "{} {} {}\n",
+            paint.bold("Could save"),
+            paint.green(&format_bytes(total)),
+            paint.bold(&format!(
+                "more in {}:",
+                counted(folders, "folder", "folders")
+            ))
         );
         for (title, confidence) in [
-            ("Likely safe", Confidence::High),
+            (paint.green("Likely safe"), Confidence::High),
             (
-                "Check before adding (generic names, or tracked by git)",
+                paint.yellow("Check before adding")
+                    + &paint.dim(" (generic names, or tracked by git)"),
                 Confidence::Check,
             ),
         ] {
@@ -422,53 +463,160 @@ pub fn recommend_text(
                     Some(rule) => format!("add to rule \"{rule}\""),
                     None => format!("new rule \"{}\"", s.catalog_rule),
                 };
-                let example = s.paths.first().map(|(p, _)| short(p)).unwrap_or_default();
                 out += &format!(
-                    "  {:>9}  {:<20} {:>11}  {target}\n",
-                    format_bytes(s.bytes),
+                    "  {}  {:<20} {}  {}\n",
+                    paint.bold(&format!("{:>9}", format_bytes(s.bytes))),
                     s.folder,
-                    counted(s.paths.len(), "folder", "folders"),
+                    paint.dim(&format!(
+                        "{:>11}",
+                        counted(s.paths.len(), "folder", "folders")
+                    )),
+                    paint.cyan(&target),
                 );
                 if verbose {
                     for (path, bytes) in &s.paths {
-                        out += &format!("  {:>9}    {}\n", format_bytes(*bytes), short(path));
+                        out += &paint.dim(&format!(
+                            "  {:>9}    {}",
+                            format_bytes(*bytes),
+                            short(path)
+                        ));
+                        out += "\n";
                     }
-                } else {
-                    out += &format!("             e.g. {example}\n");
+                } else if let Some((example, _)) = s.paths.first() {
+                    out += &paint.dim(&format!("             e.g. {}", short(example)));
+                    out += "\n";
                 }
                 for path in &s.tracked {
-                    out += &format!("             tracked by git: {}\n", short(path));
+                    out += &format!(
+                        "             {}\n",
+                        paint.yellow(&format!("tracked by git: {}", short(path)))
+                    );
                 }
             }
         }
     }
 
     if !report.caches.is_empty() {
-        out += "\nTool caches (downloadable again; exclude one with `asimeow exclude <path>`):\n";
+        out += &format!(
+            "\n{} {}\n",
+            paint.bold("Tool caches"),
+            paint.dim("(downloadable again; exclude one with `asimeow exclude <path>`):")
+        );
         for cache in &report.caches {
             out += &format!(
-                "  {:>9}  {}{}\n",
-                format_bytes(cache.bytes),
+                "  {}  {}{}\n",
+                paint.bold(&format!("{:>9}", format_bytes(cache.bytes))),
                 short(&cache.path),
                 if cache.excluded {
-                    "  (already excluded)"
+                    paint.dim("  (already excluded)")
                 } else {
-                    ""
+                    String::new()
                 }
             );
         }
     }
     if report.already_excluded > 0 {
         let n = report.already_excluded;
-        out += &format!(
-            "\n{} that the catalog knows {} already excluded by other means (like cargo marking target).\n",
+        out += "\n";
+        out += &paint.dim(&format!(
+            "{} that the catalog knows {} already excluded by other means (like cargo marking target).",
             counted(n, "more folder", "more folders"),
             if n == 1 { "is" } else { "are" }
-        );
+        ));
+        out += "\n";
     }
 
-    if !report.suggestions.is_empty() {
+    if applying || report.suggestions.is_empty() {
+        return out;
+    }
+    let safe: Vec<&Suggestion> = report
+        .suggestions
+        .iter()
+        .filter(|s| s.confidence == Confidence::High)
+        .collect();
+    if safe.is_empty() {
+        out += "\nNothing here is likely safe to apply automatically. Add the ones above by hand if they're generated";
+        out += if verbose {
+            ":\n"
+        } else {
+            " (-v prints a config snippet).\n"
+        };
+    } else {
+        let folders: usize = safe.iter().map(|s| s.paths.len()).sum();
+        let bytes: u64 = safe.iter().map(|s| s.bytes).sum();
+        out += &format!(
+            "\n{} Apply the likely-safe ones with {} ({}, {}).\n",
+            paint.cyan("→"),
+            paint.bold("asimeow recommend --apply"),
+            counted(folders, "folder", "folders"),
+            format_bytes(bytes)
+        );
+        out += &paint.dim(
+            "  They're added to your config and excluded right away. Preview with --dry-run; -v prints the config snippet instead.",
+        );
+        out += "\n";
+    }
+    if verbose {
         out += &format!("\nAdd to {config_path}:\n\n{}", recommend_snippet(report));
+    }
+    out
+}
+
+/// What `recommend --apply` prints after the report.
+pub fn applied_text(
+    applied: &Applied,
+    home: Option<&Path>,
+    config_path: &str,
+    dry_run: bool,
+    paint: Paint,
+) -> String {
+    if applied.additions.is_empty() {
+        return "\nNothing likely safe to apply.\n".to_string();
+    }
+    let short = |path: &Path| match home.and_then(|h| path.strip_prefix(h).ok()) {
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
+    };
+    let mut out = match (&applied.backup, dry_run) {
+        (_, true) => format!(
+            "\n{} would add to {config_path}:\n",
+            paint.yellow("Dry run:")
+        ),
+        (Some(backup), false) => format!(
+            "\n{} {config_path} {}\n",
+            paint.green("Added to"),
+            paint.dim(&format!("(previous version: {}):", short(backup)))
+        ),
+        (None, false) => format!("\n{} {config_path}:\n", paint.green("Added to")),
+    };
+    for a in &applied.additions {
+        let target = if a.existing {
+            format!("rule \"{}\"", a.rule)
+        } else {
+            format!("new rule \"{}\" ({})", a.rule, a.file_match)
+        };
+        out += &format!("  {}: {}\n", paint.cyan(&target), a.folders.join(", "));
+    }
+    let summary = format!(
+        "{} {} ({}).",
+        if dry_run { "Would exclude" } else { "Excluded" },
+        counted(applied.marked, "folder", "folders"),
+        format_bytes(applied.marked_bytes),
+    );
+    out += &if dry_run {
+        format!(
+            "{} {}\n",
+            paint.bold(&summary),
+            paint.dim("Nothing was written.")
+        )
+    } else {
+        format!("{} {}\n", paint.green("✓"), paint.bold(&summary))
+    };
+    for path in &applied.failed {
+        out += &format!(
+            "{}\n",
+            paint.red(&format!("❌ Could not exclude {}", short(path)))
+        );
     }
     out
 }

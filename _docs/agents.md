@@ -92,7 +92,9 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
 - `find_candidates(config, catalog, threads, home) -> Findings`: walks the roots with `walk::walk`. In each folder, names from every matching config rule are covered; names from matching catalog rules that exist as folders, aren't covered and carry no exclusion mark are `Candidate`s (with the config rule that has the same `file_match`, if any). Covered folders and candidates are not walked into. Folders in `TOOL_CACHES` (relative to `home`) are recorded and not walked: their packages' `build` folders aren't the user's.
 - `git_status(path)`: `git check-ignore` then `git ls-files --error-unmatch` → `Ignored`, `Tracked`, `Untracked` or `NoRepo`.
 - `recommend(...) -> Report`: finds candidates, measures them and the caches in parallel (`scan::folder_size`), asks git about each candidate, groups by (folder name, catalog rule) into `Suggestion`s sorted by size. A group becomes `Check` if any of its folders is tracked by git.
-- Output: `report::recommend_text` (sections, caches, snippet) and `report::recommend_snippet` (likely-safe changes as YAML in the config's style; folders to check only in a closing comment, so the snippet stays valid).
+- `safe_additions(report)` turns the likely-safe suggestions into `config_edit::Addition`s; `apply(report, config_path, dry_run) -> Applied` edits the config (after a `.bak` copy, written atomically) and marks the folders. Nothing is written or marked with `dry_run`.
+- `src/config_edit.rs`: `apply(text, additions)` edits the config text: inserts `- folder` lines after an existing rule's block-style `exclusions`, extends a one-line flow list (`[a, b]`, same quoting), or appends new rules at the end of the `rules:` block in the file's indentation. It then parses the result and requires it to equal the old config plus exactly the additions.
+- Output: `report::recommend_text` (sections, caches, then a hint to run `--apply`; with `-v`, every folder plus the config snippet) and `report::applied_text`. Both take a `report::Paint` (ANSI colors in a terminal, plain text otherwise). `report::recommend_snippet` gives likely-safe changes as YAML in the config's style; folders to check appear only in a closing comment, so the snippet stays valid.
 
 ### Cache agent
 
@@ -170,6 +172,7 @@ rules:
 - `./asimeow include <path>` — Include a path in backups
 - `./asimeow stats` — Space saved and largest excluded folders, from the cache
 - `./asimeow recommend` — Build folders the config misses, with sizes and a snippet (read-only)
+- `./asimeow recommend --apply [--dry-run]` — Add the likely-safe ones to the config and exclude them
 
 ### Dependencies
 

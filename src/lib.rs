@@ -1,6 +1,7 @@
 pub mod cache;
 pub mod catalog;
 pub mod config;
+pub mod config_edit;
 pub mod explorer;
 pub mod recommend;
 pub mod report;

@@ -2,9 +2,10 @@ use anyhow::Result;
 use asimeow::catalog::{catalog, Confidence};
 use asimeow::config::{default_rules, Config, Root, Rule};
 use asimeow::recommend::{
-    find_candidates, git_status, recommend, Candidate, Findings, Git, Report, Suggestion, ToolCache,
+    find_candidates, git_status, recommend, Applied, Candidate, Findings, Git, Report, Suggestion,
+    ToolCache,
 };
-use asimeow::report::{recommend_snippet, recommend_text};
+use asimeow::report::{applied_text, recommend_snippet, recommend_text, Paint};
 use asimeow::tm;
 use std::collections::HashSet;
 use std::fs::{self, File};
@@ -320,6 +321,8 @@ fn test_recommend_text() {
         Some(Path::new("/h")),
         "~/.config/asimeow/config.yaml",
         false,
+        false,
+        Paint(false),
     );
     assert_eq!(
         text,
@@ -340,17 +343,92 @@ fn test_recommend_text() {
          \n\
          2 more folders that the catalog knows are already excluded by other means (like cargo marking target).\n\
          \n\
-         Add to ~/.config/asimeow/config.yaml:\n\
-         \n\
-         # in rule \"node\", add under exclusions:\n\
-         \x20 - .next\n\
-         \n\
-         - name: r\n\
-         \x20 file_match: '*.Rproj'\n\
-         \x20 exclusions:\n\
-         \x20 - .Rproj.user\n\
-         \n\
-         # Check before adding: out (node)\n"
+         → Apply the likely-safe ones with asimeow recommend --apply (2 folders, 2.9 GB).\n\
+         \x20 They're added to your config and excluded right away. Preview with --dry-run; -v prints the config snippet instead.\n"
+    );
+}
+
+#[test]
+fn test_recommend_text_verbose_adds_the_snippet_and_applying_drops_the_hint() {
+    let verbose = recommend_text(
+        &sample_report(),
+        None,
+        "config.yaml",
+        true,
+        false,
+        Paint(false),
+    );
+    assert!(verbose.contains(
+        "\nAdd to config.yaml:\n\n# in rule \"node\", add under exclusions:\n  - .next\n"
+    ));
+    let applying = recommend_text(
+        &sample_report(),
+        None,
+        "config.yaml",
+        false,
+        true,
+        Paint(false),
+    );
+    assert!(!applying.contains("--apply"));
+    assert!(!applying.contains("Add to"));
+}
+
+#[test]
+fn test_color_only_when_asked() {
+    let plain = recommend_text(&sample_report(), None, "c", false, false, Paint(false));
+    let colored = recommend_text(&sample_report(), None, "c", false, false, Paint(true));
+    assert!(!plain.contains('\x1b'));
+    assert!(colored.contains("\x1b[1;32mLikely safe\x1b[0m"));
+    // Without the escape codes, the text is the same
+    let stripped = regex_free_strip(&colored);
+    assert_eq!(stripped, plain);
+}
+
+/// Removes ANSI color codes (`ESC [ … m`).
+fn regex_free_strip(text: &str) -> String {
+    let mut out = String::new();
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            for c in chars.by_ref() {
+                if c == 'm' {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+#[test]
+fn test_applied_text() {
+    let applied = Applied {
+        additions: vec![
+            asimeow::config_edit::Addition {
+                rule: "python".into(),
+                file_match: "requirements.txt".into(),
+                folders: vec![".pytest_cache".into()],
+                existing: true,
+            },
+            asimeow::config_edit::Addition {
+                rule: "r".into(),
+                file_match: "*.Rproj".into(),
+                folders: vec![".Rproj.user".into()],
+                existing: false,
+            },
+        ],
+        marked: 13,
+        marked_bytes: 15_000_000,
+        ..Applied::default()
+    };
+    assert_eq!(
+        applied_text(&applied, None, "config.yaml", true, Paint(false)),
+        "\nDry run: would add to config.yaml:\n\
+         \x20 rule \"python\": .pytest_cache\n\
+         \x20 new rule \"r\" (*.Rproj): .Rproj.user\n\
+         Would exclude 13 folders (15.0 MB). Nothing was written.\n"
     );
 }
 

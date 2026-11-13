@@ -13,11 +13,12 @@
 
 use crate::catalog::{CatalogRule, Confidence};
 use crate::config::{expand_tilde, Config, Rule};
+use crate::config_edit::{self, Addition};
 use crate::rules::Matcher;
 use crate::scan;
 use crate::tm;
 use crate::walk;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -392,4 +393,88 @@ fn parallel_map<T: Sync, R: Send>(
     let mut results = results.into_inner().unwrap();
     results.sort_by_key(|(index, _)| *index);
     results.into_iter().map(|(_, result)| result).collect()
+}
+
+/// The config changes for the likely-safe suggestions: folders added to existing rules,
+/// and new rules. "Check before adding" suggestions are never included.
+pub fn safe_additions(report: &Report) -> Vec<Addition> {
+    let mut additions: Vec<Addition> = Vec::new();
+    for s in report
+        .suggestions
+        .iter()
+        .filter(|s| s.confidence == Confidence::High)
+    {
+        let (rule, existing) = match &s.config_rule {
+            Some(rule) => (rule.clone(), true),
+            None => (s.catalog_rule.clone(), false),
+        };
+        match additions
+            .iter_mut()
+            .find(|a| a.rule == rule && a.existing == existing)
+        {
+            Some(addition) => addition.folders.push(s.folder.clone()),
+            None => additions.push(Addition {
+                rule,
+                file_match: s.file_match.clone(),
+                folders: vec![s.folder.clone()],
+                existing,
+            }),
+        }
+    }
+    additions
+}
+
+/// What `recommend --apply` did (or would do, in a dry run).
+#[derive(Debug, Default)]
+pub struct Applied {
+    pub additions: Vec<Addition>,
+    /// The copy of the old config, if the config was changed.
+    pub backup: Option<PathBuf>,
+    /// Folders marked (or to be marked) and their total size.
+    pub marked: usize,
+    pub marked_bytes: u64,
+    pub failed: Vec<PathBuf>,
+}
+
+/// Applies the likely-safe suggestions: adds them to the config at `config_path` (after a
+/// `.bak` copy; the edit is verified, see [`config_edit::apply`]) and marks the folders
+/// found. With `dry_run`, nothing is written or marked.
+pub fn apply(report: &Report, config_path: &Path, dry_run: bool) -> Result<Applied> {
+    let additions = safe_additions(report);
+    let safe: Vec<&Suggestion> = report
+        .suggestions
+        .iter()
+        .filter(|s| s.confidence == Confidence::High)
+        .collect();
+    let mut applied = Applied {
+        additions,
+        ..Applied::default()
+    };
+    if applied.additions.is_empty() {
+        return Ok(applied);
+    }
+
+    let text = fs::read_to_string(config_path)
+        .with_context(|| format!("Failed to read {}", config_path.display()))?;
+    let edited = config_edit::apply(&text, &applied.additions)?;
+    if !dry_run {
+        let backup = config_path.with_extension("yaml.bak");
+        fs::write(&backup, &text)
+            .with_context(|| format!("Failed to write {}", backup.display()))?;
+        let tmp = config_path.with_extension("yaml.tmp");
+        fs::write(&tmp, &edited).with_context(|| format!("Failed to write {}", tmp.display()))?;
+        fs::rename(&tmp, config_path)
+            .with_context(|| format!("Failed to write {}", config_path.display()))?;
+        applied.backup = Some(backup);
+    }
+
+    for (path, bytes) in safe.iter().flat_map(|s| &s.paths) {
+        if dry_run || tm::set_exclusion_mark(path, true) {
+            applied.marked += 1;
+            applied.marked_bytes += bytes;
+        } else {
+            applied.failed.push(path.clone());
+        }
+    }
+    Ok(applied)
 }

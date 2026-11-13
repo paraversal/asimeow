@@ -13,7 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Suggestions are split into "likely safe" and "check before adding" (generic names like
   `build`, `dist`, `out`, or folders that git tracks). Package-manager and toolchain caches
   (`~/.npm`, `~/.cargo/registry`, `~/.rustup`, …) are listed separately with their sizes.
-  Ends with a config snippet to paste. Read-only: it changes nothing.
+  Ends with how to apply the likely-safe ones (`--apply`); `-v` prints a config snippet
+  instead. Colored in a terminal. Read-only: it changes nothing.
+- `asimeow recommend --apply`: adds the likely-safe suggestions to the config and excludes
+  the folders found. The config is edited as text, so comments and layout stay; the edit
+  is checked by parsing the result, and the previous version is kept as `config.yaml.bak`.
+  With `--dry-run`, it only shows what it would change.
+- `--dry-run` is accepted after a subcommand too
 - `--visual` (alias `--tui`): a full-screen view of a scan. It shows live progress (with
   an estimate from the last run), space saved (total, this run, change since the last
   run), the excluded folders grouped by area and sorted by size (folding, `n` for only

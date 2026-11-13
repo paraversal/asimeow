@@ -5,6 +5,7 @@ use asimeow::tui::{App, TuiReporter};
 use asimeow::{config, explorer, recommend, scan};
 use clap::{Parser, Subcommand};
 use std::io::{self, IsTerminal};
+use std::path::Path;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -26,7 +27,7 @@ struct Args {
     threads: usize,
 
     /// Show what would be excluded without changing anything
-    #[arg(long)]
+    #[arg(long, global = true)]
     dry_run: bool,
 
     /// Full-screen view: live progress, space saved, and the excluded folders by size
@@ -72,8 +73,13 @@ enum Commands {
     /// Show how much space the exclusions save, from the last scan (no new scan)
     Stats,
     /// Suggest build folders your config doesn't exclude yet, with the space they'd save.
-    /// Read-only: prints a snippet to add to the config, changes nothing
-    Recommend,
+    /// Read-only unless --apply: prints a snippet to add to the config
+    Recommend {
+        /// Add the likely-safe suggestions to the config (a .bak copy is kept) and exclude
+        /// the folders found. Combine with --dry-run to preview
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -106,17 +112,41 @@ fn main() -> Result<()> {
                 print!("{}", report::stats(&cache, cache::now(), home.as_deref()));
                 return Ok(());
             }
-            Commands::Recommend => {
+            Commands::Recommend { apply } => {
                 let explicit = (args.config != "config.yaml").then_some(args.config.as_str());
                 let (config, config_path) = config::load_config(explicit, args.verbose)?;
                 println!("Using configuration: {}", config_path);
                 let home = dirs::home_dir();
                 let catalog = asimeow::catalog::catalog();
+                let paint = report::Paint(io::stdout().is_terminal() && report::color_enabled());
                 let found = recommend::recommend(&config, &catalog, args.threads, home.as_deref())?;
                 print!(
                     "{}",
-                    report::recommend_text(&found, home.as_deref(), &config_path, args.verbose)
+                    report::recommend_text(
+                        &found,
+                        home.as_deref(),
+                        &config_path,
+                        args.verbose,
+                        *apply,
+                        paint,
+                    )
                 );
+                if *apply {
+                    let applied = recommend::apply(&found, Path::new(&config_path), args.dry_run)?;
+                    print!(
+                        "{}",
+                        report::applied_text(
+                            &applied,
+                            home.as_deref(),
+                            &config_path,
+                            args.dry_run,
+                            paint
+                        )
+                    );
+                    if !applied.failed.is_empty() {
+                        std::process::exit(1);
+                    }
+                }
                 return Ok(());
             }
         }
