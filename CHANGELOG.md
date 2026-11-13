@@ -35,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is less than 7 days old. Dry runs don't update it.
 
 ### Changed
+- The repository's `config.yaml` is now `config.example.yaml` (with a generic root), and
+  `/config.yaml` is git-ignored. Before, running asimeow from the repository picked up that
+  file instead of `~/.config/asimeow/config.yaml`, unless `-c` was given.
 - Quiet output: only changes are listed (newly excluded folders, failures, warnings).
   Already-excluded folders and unreadable folders (such as `~/.Trash`) are counted in the
   summary and listed only with `-v`.
@@ -67,6 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `config::load_config` no longer prints "Using configuration: …" (the binary does)
 
 ### Fixed
+- `-c`, `-v` and `-t` are accepted after a subcommand too (`asimeow recommend -c …`)
 - A race in the worker queue could end a scan early and silently skip folders
 - Symlinked directories are no longer followed (no more loops or walks into other volumes)
 - A failed exclusion was reported as "already excluded"; it's now reported as an error

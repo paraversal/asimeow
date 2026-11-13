@@ -142,6 +142,8 @@ Asimeow looks for configuration files in the following order:
 
 If no configuration file is found, Asimeow will display an error message with instructions on how to create one.
 
+The repository contains `config.example.yaml`, a complete example configuration.
+
 ## Configuration
 
 The tool uses a YAML configuration file with the following structure:

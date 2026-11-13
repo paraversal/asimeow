@@ -14,15 +14,15 @@ use std::io::{self, IsTerminal};
 )]
 struct Args {
     /// Path to the config file
-    #[arg(short, long, default_value = "config.yaml")]
+    #[arg(short, long, default_value = "config.yaml", global = true)]
     config: String,
 
     /// Verbose output
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     verbose: bool,
 
     /// Number of worker threads
-    #[arg(short, long, default_value = "4")]
+    #[arg(short, long, default_value = "4", global = true)]
     threads: usize,
 
     /// Show what would be excluded without changing anything

@@ -13,6 +13,13 @@ Thank you for your interest in contributing to Asimeow! This document provides g
 7. Push your branch to your fork on GitHub
 8. Open a pull request against the main repository
 
+## Running asimeow Locally
+
+asimeow reads `./config.yaml` before `~/.config/asimeow/config.yaml`. The repository has no
+`config.yaml` (only `config.example.yaml`), so `cargo run -- --dry-run` from the repository
+uses your own config. To try a different one, pass `-c`, or copy `config.example.yaml` to
+`config.yaml`: that file is git-ignored.
+
 ## Running Tests Locally
 
 Before submitting a pull request, make sure all tests pass:

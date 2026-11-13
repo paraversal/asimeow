@@ -6,9 +6,9 @@ mod tests {
 
     #[test]
     fn test_config_parsing() {
-        // This test ensures that our config.yaml file can be parsed correctly
-        let config_path = Path::new("config.yaml");
-        assert!(config_path.exists(), "config.yaml file not found");
+        // The example config in the repository parses
+        let config_path = Path::new("config.example.yaml");
+        assert!(config_path.exists(), "config.example.yaml not found");
 
         let config_content = fs::read_to_string(config_path).expect("Failed to read config file");
         let config: serde_yaml::Value =

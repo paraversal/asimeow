@@ -1,1 +1,3 @@
 /target
+# A local config for development runs; asimeow reads ./config.yaml before ~/.config
+/config.yaml
