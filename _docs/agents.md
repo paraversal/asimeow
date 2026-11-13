@@ -42,7 +42,7 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
   - `Root { path: String }`
   - `Rule { name: String, file_match: String, exclusions: Vec<String> }`
 - **Responsibilities**:
-  - `create_default_config(local, path)`: creates a YAML config with common rules (Node, Rust, Python, etc.). Ensures directories and writes file.
+  - `default_rules()`: the rules `init` writes (Node, Rust, Python, …). `create_default_config(local, path)` writes them into a new config file.
   - `find_config_file(specified)`: resolves config from explicit path, `./config.yaml`, or `~/.config/asimeow/config.yaml`.
   - `load_config(path, verbose)`: reads, parses YAML, prints loaded rules in verbose mode, and validates `roots`.
   - `expand_tilde(path)`: resolves `~/` to the user home directory.
@@ -57,7 +57,7 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
   - `Progress`: atomic folder count, the sizing counters (`to_size`, `sized`) and the current folder; workers update it and reporters sample it.
   - `Summary { dirs, exclusions, newly_excluded, recreated, failed, unreadable, excluded_bytes, new_bytes, measured, previous_bytes, elapsed }`.
 - **Sizing phase** (after the walk): the same number of threads take the found exclusion folders one by one. `size()` reuses the cached size when the inode and mtime (ns) match and it's younger than `SIZE_TTL_SECS` (7 days); otherwise `folder_size()` measures it (logical `st_size` sum, hard links once, symlinks not followed).
-- **Workers**: scoped threads share a private `Walker` (matcher, options, event sender, counters). Each pops a directory from the `Queue`, calls `process_dir()`, and hands the returned subdirectories back with `Queue::finish`, which adds the children and retires the parent in one locked step. The `Queue` is a `VecDeque<PathBuf>` plus a `pending` count under one `Mutex` with a `Condvar`, so the walk can't end while a worker still holds work.
+- **Workers**: `walk::walk` (see Walk agent) runs `process_dir` on scoped threads that share a private `Walker` (matcher, options, event sender, counters).
 - **`process_dir(path)`**:
   - Skips directories whose name matches an `ignore` pattern.
   - Reads entries once. It matches each name against the rules and collects subdirectories with `DirEntry::file_type()`, which does not follow symlinks.
@@ -81,6 +81,17 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
 - `TuiReporter`: implements `Reporter`. `start` takes over the terminal (`ratatui::init`, which also restores it on panic); `tick` reads keys, redraws, and sets `Progress::cancel` when the user quits during a scan; `wait_for_quit` keeps the view up after the scan; `close` restores the terminal and replays the changes plus the summary through a `CompactReporter`.
 - Cancelling: `scan` checks `Progress::cancel` per folder (walk and sizing) and sets `Summary::cancelled`; `main` doesn't save the cache for a cancelled run.
 
+### Walk agent
+
+- File: `src/walk.rs`. `walk(roots, threads, visit)` calls `visit(dir)` once per directory on `threads` scoped threads; `visit` returns the subdirectories to walk next.
+- The `Queue` is a `VecDeque<PathBuf>` plus a `pending` count (queued or being processed) under one `Mutex` with a `Condvar`. `finish` adds the children and retires the parent in one locked step, so the walk can't end while a worker still holds work. Shared by `scan` and the planned `recommend`.
+
+### Recommend agent (in progress)
+
+- Files: `src/catalog.yaml` (built-in rules; each folder has a confidence, `high` or `check`), `src/catalog.rs` (`catalog()`, `CatalogRule`, `Confidence`), `src/recommend.rs`.
+- `find_candidates(config, catalog, threads) -> Findings`: walks the roots with `walk::walk`. In each folder, names from every matching config rule are covered; names from matching catalog rules that exist as folders, aren't covered and carry no exclusion mark are `Candidate`s (with the config rule that has the same `file_match`, if any). Covered folders and candidates are not walked into. Read-only.
+- Still to come (see `_docs/wip/recommend-plan.md`): sizes, git signal, skipping package-manager caches, the report and the `recommend` subcommand.
+
 ### Cache agent
 
 - File: `src/cache.rs`
@@ -92,6 +103,7 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
 - File: `src/rules.rs`
 - `Matcher::new(rules, ignore)` compiles everything once. Literal `file_match` names (most rules) go into a hash map; real globs (`*.csproj`) are matched in order. Matching is case-insensitive and the first rule in config order wins.
 - `is_ignored(dir_name)`: glob match of `ignore` patterns on a directory name (case-sensitive).
+- `rules_for(name)`: every matching rule in config order (used by `recommend`, where one marker can match a config rule and a catalog rule).
 
 ### Time Machine integration agent
 

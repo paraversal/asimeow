@@ -8,14 +8,15 @@ use crate::cache::{self, Cache, Entry, LastRun};
 use crate::config::{Config, Rule};
 use crate::rules::Matcher;
 use crate::tm;
+use crate::walk;
 use anyhow::Result;
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::{Condvar, Mutex};
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -165,16 +166,7 @@ pub fn scan(
     }
 
     // Walk: find exclusion folders and mark them.
-    let queue = Queue::new(roots);
-    thread::scope(|scope| {
-        for _ in 0..opts.threads.max(1) {
-            scope.spawn(|| {
-                while let Some(dir) = queue.pop() {
-                    queue.finish(walker.process_dir(&dir));
-                }
-            });
-        }
-    });
+    walk::walk(roots, opts.threads, |dir| walker.process_dir(dir));
 
     // Size every exclusion folder found, in parallel.
     let found = std::mem::take(&mut *walker.found.lock().unwrap());
@@ -438,45 +430,5 @@ impl Walker<'_> {
             bytes,
             sized_at,
         })
-    }
-}
-
-/// Work queue for the walk. `pending` counts directories that are queued or being
-/// processed, and both live under one lock, so "no work left" can't be observed while
-/// another worker is between taking a directory and queueing its children.
-struct Queue {
-    inner: Mutex<(VecDeque<PathBuf>, usize)>,
-    changed: Condvar,
-}
-
-impl Queue {
-    fn new(roots: Vec<PathBuf>) -> Self {
-        let pending = roots.len();
-        Queue {
-            inner: Mutex::new((roots.into(), pending)),
-            changed: Condvar::new(),
-        }
-    }
-
-    /// Next directory to process, or None once the whole tree is done.
-    fn pop(&self) -> Option<PathBuf> {
-        let mut inner = self.inner.lock().unwrap();
-        loop {
-            if let Some(path) = inner.0.pop_front() {
-                return Some(path);
-            }
-            if inner.1 == 0 {
-                return None;
-            }
-            inner = self.changed.wait(inner).unwrap();
-        }
-    }
-
-    /// Marks one directory as done and queues its subdirectories.
-    fn finish(&self, children: Vec<PathBuf>) {
-        let mut inner = self.inner.lock().unwrap();
-        inner.1 = inner.1 + children.len() - 1;
-        inner.0.extend(children);
-        self.changed.notify_all();
     }
 }

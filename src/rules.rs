@@ -8,7 +8,8 @@ use std::collections::HashMap;
 /// hash lookup; only real glob patterns (`*.csproj`) are matched one by one.
 pub struct Matcher {
     rules: Vec<Rule>,
-    literal: HashMap<String, usize>,
+    /// Literal file name → indexes of the rules with that name, in config order.
+    literal: HashMap<String, Vec<usize>>,
     globs: Vec<(Pattern, usize)>,
     ignore: Vec<Pattern>,
 }
@@ -20,7 +21,7 @@ impl Matcher {
         for (index, rule) in rules.iter().enumerate() {
             let pattern = rule.file_match.to_lowercase();
             if is_literal(&pattern) {
-                literal.entry(pattern).or_insert(index);
+                literal.entry(pattern).or_insert_with(Vec::new).push(index);
             } else {
                 globs.push((compile(&pattern), index));
             }
@@ -41,7 +42,10 @@ impl Matcher {
     /// The first rule, in config order, whose `file_match` matches `name` (case-insensitive).
     pub fn rule_for(&self, name: &str) -> Option<&Rule> {
         let name = name.to_lowercase();
-        let by_literal = self.literal.get(&name).copied();
+        let by_literal = self
+            .literal
+            .get(&name)
+            .and_then(|indexes| indexes.first().copied());
         let by_glob = self
             .globs
             .iter()
@@ -52,6 +56,20 @@ impl Matcher {
             (a, b) => a.or(b)?,
         };
         Some(&self.rules[index])
+    }
+
+    /// Every rule whose `file_match` matches `name` (case-insensitive), in config order.
+    pub fn rules_for(&self, name: &str) -> Vec<&Rule> {
+        let name = name.to_lowercase();
+        let mut indexes: Vec<usize> = self.literal.get(&name).cloned().unwrap_or_default();
+        indexes.extend(
+            self.globs
+                .iter()
+                .filter(|(pattern, _)| pattern.matches(&name))
+                .map(|(_, index)| *index),
+        );
+        indexes.sort_unstable();
+        indexes.into_iter().map(|i| &self.rules[i]).collect()
     }
 
     /// True if a directory with this name should be skipped entirely (case-sensitive).

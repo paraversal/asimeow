@@ -1,8 +1,11 @@
 pub mod cache;
+pub mod catalog;
 pub mod config;
 pub mod explorer;
+pub mod recommend;
 pub mod report;
 pub mod rules;
 pub mod scan;
 pub mod tm;
 pub mod tui;
+pub mod walk;

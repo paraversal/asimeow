@@ -24,6 +24,87 @@ pub struct Rule {
     pub exclusions: Vec<String>,
 }
 
+/// The rules `init` writes into a new config.
+pub fn default_rules() -> Vec<Rule> {
+    vec![
+        Rule {
+            name: "net".to_string(),
+            file_match: "*.csproj".to_string(),
+            exclusions: vec!["obj".to_string(), "bin".to_string(), "packages".to_string()],
+        },
+        Rule {
+            name: "rust".to_string(),
+            file_match: "cargo.toml".to_string(),
+            exclusions: vec!["target".to_string()],
+        },
+        Rule {
+            name: "go".to_string(),
+            file_match: "go.mod".to_string(),
+            exclusions: vec!["vendor".to_string()],
+        },
+        Rule {
+            name: "node".to_string(),
+            file_match: "package.json".to_string(),
+            exclusions: vec!["node_modules".to_string(), "dist".to_string()],
+        },
+        Rule {
+            name: "python".to_string(),
+            file_match: "requirements.txt".to_string(),
+            exclusions: vec!["__pycache__".to_string(), ".venv".to_string()],
+        },
+        Rule {
+            name: "java".to_string(),
+            file_match: "pom.xml".to_string(),
+            exclusions: vec!["target".to_string()],
+        },
+        Rule {
+            name: "php".to_string(),
+            file_match: "composer.json".to_string(),
+            exclusions: vec!["vendor".to_string()],
+        },
+        Rule {
+            name: "vagrant".to_string(),
+            file_match: "Vagrantfile".to_string(),
+            exclusions: vec![".vagrant".to_string()],
+        },
+        Rule {
+            name: "bower".to_string(),
+            file_match: "bower.json".to_string(),
+            exclusions: vec!["bower_components".to_string()],
+        },
+        Rule {
+            name: "haskell".to_string(),
+            file_match: "stack.yaml".to_string(),
+            exclusions: vec![".stack-work".to_string()],
+        },
+        Rule {
+            name: "carthage".to_string(),
+            file_match: "Cartfile".to_string(),
+            exclusions: vec!["Carthage".to_string()],
+        },
+        Rule {
+            name: "cocoapods".to_string(),
+            file_match: "Podfile".to_string(),
+            exclusions: vec!["Pods".to_string()],
+        },
+        Rule {
+            name: "swift".to_string(),
+            file_match: "Package.swift".to_string(),
+            exclusions: vec![".build".to_string()],
+        },
+        Rule {
+            name: "elixir".to_string(),
+            file_match: "mix.exs".to_string(),
+            exclusions: vec!["_build".to_string()],
+        },
+        Rule {
+            name: "project".to_string(),
+            file_match: "*.prj".to_string(),
+            exclusions: vec!["bin".to_string(), "debug".to_string()],
+        },
+    ]
+}
+
 /// Creates a default config file with common development project rules
 pub fn create_default_config(local: bool, specified_path: Option<&str>) -> Result<()> {
     // Determine the path for the config file
@@ -56,83 +137,7 @@ pub fn create_default_config(local: bool, specified_path: Option<&str>) -> Resul
             path: "~/".to_string(),
         }],
         ignore: vec![".git".to_string()],
-        rules: vec![
-            Rule {
-                name: "net".to_string(),
-                file_match: "*.csproj".to_string(),
-                exclusions: vec!["obj".to_string(), "bin".to_string(), "packages".to_string()],
-            },
-            Rule {
-                name: "rust".to_string(),
-                file_match: "cargo.toml".to_string(),
-                exclusions: vec!["target".to_string()],
-            },
-            Rule {
-                name: "go".to_string(),
-                file_match: "go.mod".to_string(),
-                exclusions: vec!["vendor".to_string()],
-            },
-            Rule {
-                name: "node".to_string(),
-                file_match: "package.json".to_string(),
-                exclusions: vec!["node_modules".to_string(), "dist".to_string()],
-            },
-            Rule {
-                name: "python".to_string(),
-                file_match: "requirements.txt".to_string(),
-                exclusions: vec!["__pycache__".to_string(), ".venv".to_string()],
-            },
-            Rule {
-                name: "java".to_string(),
-                file_match: "pom.xml".to_string(),
-                exclusions: vec!["target".to_string()],
-            },
-            Rule {
-                name: "php".to_string(),
-                file_match: "composer.json".to_string(),
-                exclusions: vec!["vendor".to_string()],
-            },
-            Rule {
-                name: "vagrant".to_string(),
-                file_match: "Vagrantfile".to_string(),
-                exclusions: vec![".vagrant".to_string()],
-            },
-            Rule {
-                name: "bower".to_string(),
-                file_match: "bower.json".to_string(),
-                exclusions: vec!["bower_components".to_string()],
-            },
-            Rule {
-                name: "haskell".to_string(),
-                file_match: "stack.yaml".to_string(),
-                exclusions: vec![".stack-work".to_string()],
-            },
-            Rule {
-                name: "carthage".to_string(),
-                file_match: "Cartfile".to_string(),
-                exclusions: vec!["Carthage".to_string()],
-            },
-            Rule {
-                name: "cocoapods".to_string(),
-                file_match: "Podfile".to_string(),
-                exclusions: vec!["Pods".to_string()],
-            },
-            Rule {
-                name: "swift".to_string(),
-                file_match: "Package.swift".to_string(),
-                exclusions: vec![".build".to_string()],
-            },
-            Rule {
-                name: "elixir".to_string(),
-                file_match: "mix.exs".to_string(),
-                exclusions: vec!["_build".to_string()],
-            },
-            Rule {
-                name: "project".to_string(),
-                file_match: "*.prj".to_string(),
-                exclusions: vec!["bin".to_string(), "debug".to_string()],
-            },
-        ],
+        rules: default_rules(),
     };
 
     // Serialize the config to YAML

@@ -49,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A scan no longer treats folders inside system-excluded locations (such as `/tmp`) or
   inside an excluded parent as already excluded: they get their own mark
 - New dependencies: `serde_json` (cache file) and `ratatui` (the `--visual` screen)
+- Internal: the parallel directory walk moved into its own `walk` module, so other commands can reuse it
 
 ### Removed
 - Library API (the crate's `explorer` module), replaced by the `scan`, `report`, `tm`,

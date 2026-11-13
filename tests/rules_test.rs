@@ -60,3 +60,23 @@ fn test_ignore_patterns_match_directory_names() {
     assert!(m.is_ignored("cache-v2"));
     assert!(!m.is_ignored("src"));
 }
+
+#[test]
+fn test_rules_for_returns_every_match_in_config_order() {
+    let m = Matcher::new(
+        vec![
+            rule("node", "package.json"),
+            rule("any-json", "*.json"),
+            rule("rust", "Cargo.toml"),
+            rule("node-extra", "PACKAGE.json"),
+        ],
+        &[],
+    );
+    let names: Vec<&str> = m
+        .rules_for("package.json")
+        .iter()
+        .map(|r| r.name.as_str())
+        .collect();
+    assert_eq!(names, vec!["node", "any-json", "node-extra"]);
+    assert!(m.rules_for("README.md").is_empty());
+}

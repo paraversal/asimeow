@@ -2,6 +2,7 @@
 mod cache_test;
 mod config_test;
 mod exclusion_test;
+mod recommend_test;
 mod report_test;
 mod rules_test;
 mod scan_test;

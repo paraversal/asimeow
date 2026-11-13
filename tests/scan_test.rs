@@ -309,3 +309,35 @@ fn test_symlinked_directories_are_not_followed() -> Result<()> {
     assert_eq!(stats.dirs, 2, "only the root and real/");
     Ok(())
 }
+
+#[test]
+fn test_walk_visits_every_directory_once() -> Result<()> {
+    use std::sync::Mutex;
+
+    let temp_dir = tempdir()?;
+    for path in ["a/b/c", "a/d", "e"] {
+        fs::create_dir_all(temp_dir.path().join(path))?;
+    }
+    let visited = Mutex::new(Vec::new());
+
+    asimeow::walk::walk(vec![temp_dir.path().to_path_buf()], 4, |dir| {
+        visited.lock().unwrap().push(dir.to_path_buf());
+        fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .map(|e| e.path())
+            .collect()
+    });
+
+    let mut visited = visited.into_inner().unwrap();
+    visited.sort();
+    let mut expected: Vec<_> = ["a", "a/b", "a/b/c", "a/d", "e"]
+        .iter()
+        .map(|p| temp_dir.path().join(p))
+        .chain([temp_dir.path().to_path_buf()])
+        .collect();
+    expected.sort();
+    assert_eq!(visited, expected);
+    Ok(())
+}
