@@ -1,6 +1,6 @@
 use anyhow::Result;
 use asimeow::cache::{self, Cache};
-use asimeow::report::{self, CompactReporter, LogReporter};
+use asimeow::report::{self, CompactReporter, JsonReporter, LogReporter};
 use asimeow::tui::{App, TuiReporter};
 use asimeow::{config, explorer, recommend, scan};
 use clap::{Parser, Subcommand};
@@ -33,6 +33,10 @@ struct Args {
     /// Full-screen view: live progress, space saved, and the excluded folders by size
     #[arg(long, visible_alias = "tui")]
     visual: bool,
+
+    /// One JSON object on stdout instead of human output (for scripts and notifications)
+    #[arg(long, conflicts_with = "visual")]
+    json: bool,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -152,7 +156,9 @@ fn main() -> Result<()> {
         }
     }
 
-    if args.verbose {
+    // --json promises one parseable object on stdout, so no banner, no config note.
+    let verbose = args.verbose && !args.json;
+    if verbose {
         println!("Asimeow - Time Machine Exclusion Tool");
         println!("------------------------------------");
         println!("Using {} worker threads", args.threads);
@@ -166,12 +172,14 @@ fn main() -> Result<()> {
         None
     };
 
-    let (config, config_path) = config::load_config(config_path, args.verbose)?;
-    println!("Using configuration: {}", config_path);
+    let (config, config_path) = config::load_config(config_path, verbose)?;
+    if !args.json {
+        println!("Using configuration: {}", config_path);
+    }
 
     let opts = scan::Options {
         threads: args.threads,
-        verbose: args.verbose,
+        verbose,
         dry_run: args.dry_run,
     };
     let cache_path = Cache::default_path();
@@ -207,6 +215,9 @@ fn main() -> Result<()> {
                 return Err(e);
             }
         }
+    } else if args.json {
+        let mut reporter = JsonReporter::new(io::stdout(), &opts);
+        report::run(config, &opts, &previous, &mut reporter)?
     } else if terminal {
         let mut reporter = CompactReporter::new(io::stdout(), &opts, color);
         report::run(config, &opts, &previous, &mut reporter)?

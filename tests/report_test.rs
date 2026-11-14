@@ -1,7 +1,7 @@
 use asimeow::cache::{Cache, Entry, LastRun};
 use asimeow::report::{
-    format_bytes, group_digits, savings, stats, truncate_left, CompactReporter, LogReporter,
-    Reporter,
+    format_bytes, group_digits, savings, stats, truncate_left, CompactReporter, JsonReporter,
+    LogReporter, Reporter,
 };
 use asimeow::scan::{Event, Kind, Options, Summary};
 use std::path::{Path, PathBuf};
@@ -98,6 +98,42 @@ fn test_log_marks_dry_runs() {
     let (out, _) = log(&options(false, true), &[exclusion("/x/a", Kind::New)]);
     assert!(out.starts_with("✅ /x/a - node (dry run)\n"));
     assert!(out.trim_end().ends_with("dry_run=true"));
+}
+
+#[test]
+fn test_json_is_one_object_with_counts_changes_and_warnings() {
+    let mut out: Vec<u8> = Vec::new();
+    let mut err: Vec<u8> = Vec::new();
+    {
+        let mut reporter = JsonReporter::new(&mut out, &options(false, false));
+        reporter.event(&exclusion("/x/app/node_modules", Kind::New));
+        reporter.event(&exclusion("/x/old/node_modules", Kind::Already));
+        reporter.event(&exclusion("/x/app/dist", Kind::Recreated));
+        reporter.event(&Event::Failed {
+            path: PathBuf::from("/x/broken"),
+            rule: "rust".to_string(),
+        });
+        reporter.event(&Event::Warning("root /missing does not exist".to_string()));
+        reporter.finish(&summary());
+    }
+
+    assert!(err.is_empty(), "the JSON reporter writes only to stdout");
+    let text = String::from_utf8(out).unwrap();
+    assert_eq!(text.lines().count(), 1, "one object, one line");
+
+    let v: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
+    assert_eq!(v["folders"], 21967);
+    assert_eq!(v["new"], 2);
+    assert_eq!(v["recreated"], 1);
+    assert_eq!(v["excluded_bytes"], 9_319_000_000u64);
+    assert_eq!(v["previous_bytes"], 8_710_000_000u64);
+    assert_eq!(v["dry_run"], false);
+    assert_eq!(v["changed"].as_array().unwrap().len(), 2, "Already is not a change");
+    assert_eq!(v["changed"][0]["path"], "/x/app/node_modules");
+    assert_eq!(v["changed"][0]["kind"], "new");
+    assert_eq!(v["changed"][1]["kind"], "recreated");
+    assert_eq!(v["failures"][0]["path"], "/x/broken");
+    assert_eq!(v["warnings"][0], "root /missing does not exist");
 }
 
 #[test]

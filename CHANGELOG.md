@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `--json`: one JSON object on stdout instead of the human output, for scripts and
+  notifications. It carries the counts from the summary line plus `changed` (path, rule,
+  new/recreated), `failures` and `warnings` arrays, and prints nothing else. `--visual` and
+  `--json` are mutually exclusive.
 - `asimeow recommend`: finds build and dependency folders your config doesn't exclude yet,
   using a built-in catalog of 36 project types, and shows how much space each would save.
   Suggestions are split into "likely safe" and "check before adding" (generic names like

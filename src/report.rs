@@ -2,10 +2,14 @@
 //!
 //! - [`LogReporter`]: plain lines for scripts and log files (stdout is not a terminal).
 //! - [`CompactReporter`]: a live status line in a terminal, plus one line per change.
+//! - [`JsonReporter`]: one JSON object on stdout (`--json`), for scripts that must not
+//!   parse the human output.
 //!
-//! Both print only what changed by default (newly excluded folders, failures, warnings)
-//! and finish with a summary that includes how much space the exclusions save. `-v` adds
-//! already-excluded folders, unreadable folders, folder sizes and traces.
+//! The text reporters print only what changed by default (newly excluded folders,
+//! failures, warnings) and finish with a summary that includes how much space the
+//! exclusions save. `-v` adds already-excluded folders, unreadable folders, folder sizes
+//! and traces. The JSON reporter always carries the same counts, the changed folders,
+//! failures and warnings.
 
 use crate::cache::Cache;
 use crate::catalog::Confidence;
@@ -145,6 +149,104 @@ impl<O: Write, E: Write> Reporter for LogReporter<O, E> {
             s.elapsed.as_secs_f64(),
             if self.dry_run { " dry_run=true" } else { "" }
         );
+    }
+}
+
+/// One JSON object on stdout, for scripts (`--json`). Nothing else is printed: failures
+/// and warnings go into the object instead of stderr. Field names match the `key=value`
+/// summary line of [`LogReporter`], so either can be parsed by the same caller.
+pub struct JsonReporter<W: Write> {
+    out: W,
+    dry_run: bool,
+    changed: Vec<Change>,
+    failures: Vec<Failure>,
+    warnings: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+struct Change {
+    path: String,
+    rule: String,
+    /// `"new"` or `"recreated"`.
+    kind: &'static str,
+}
+
+#[derive(serde::Serialize)]
+struct Failure {
+    path: String,
+    rule: String,
+}
+
+#[derive(serde::Serialize)]
+struct JsonReport<'a> {
+    folders: usize,
+    exclusions: usize,
+    new: usize,
+    recreated: usize,
+    failed: usize,
+    unreadable: usize,
+    excluded_bytes: u64,
+    new_bytes: u64,
+    measured: usize,
+    previous_bytes: Option<u64>,
+    seconds: f64,
+    dry_run: bool,
+    changed: &'a [Change],
+    failures: &'a [Failure],
+    warnings: &'a [String],
+}
+
+impl<W: Write> JsonReporter<W> {
+    pub fn new(out: W, opts: &Options) -> Self {
+        JsonReporter {
+            out,
+            dry_run: opts.dry_run,
+            changed: Vec::new(),
+            failures: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
+}
+
+impl<W: Write> Reporter for JsonReporter<W> {
+    fn event(&mut self, event: &Event) {
+        match event {
+            Event::Exclusion { path, rule, kind } if *kind != Kind::Already => {
+                self.changed.push(Change {
+                    path: path.display().to_string(),
+                    rule: rule.clone(),
+                    kind: if *kind == Kind::New { "new" } else { "recreated" },
+                })
+            }
+            Event::Failed { path, rule } => self.failures.push(Failure {
+                path: path.display().to_string(),
+                rule: rule.clone(),
+            }),
+            Event::Warning(message) => self.warnings.push(message.clone()),
+            _ => {}
+        }
+    }
+
+    fn finish(&mut self, s: &Summary) {
+        let report = JsonReport {
+            folders: s.dirs,
+            exclusions: s.exclusions,
+            new: s.newly_excluded,
+            recreated: s.recreated,
+            failed: s.failed,
+            unreadable: s.unreadable,
+            excluded_bytes: s.excluded_bytes,
+            new_bytes: s.new_bytes,
+            measured: s.measured,
+            previous_bytes: s.previous_bytes,
+            seconds: s.elapsed.as_secs_f64(),
+            dry_run: self.dry_run,
+            changed: &self.changed,
+            failures: &self.failures,
+            warnings: &self.warnings,
+        };
+        let _ = serde_json::to_writer(&mut self.out, &report);
+        let _ = writeln!(self.out);
     }
 }
 

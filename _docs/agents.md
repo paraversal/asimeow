@@ -28,11 +28,12 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
   - `-v, --verbose`
   - `-t, --threads <N>` worker threads for traversal
   - `--dry-run` report without writing marks
+  - `--json` one JSON object on stdout instead of human output (for scripts and notifications)
   - `--visual` / `--tui` full-screen view (needs a terminal; otherwise plain lines)
   - Subcommands: `init`, `version`, `list`, `exclude`, `include`, `stats`, `recommend`
 - **Execution flow**:
   1. If a subcommand is provided, execute it immediately and exit.
-  2. Otherwise, load configuration (auto-detect path) and the cache, pick a reporter (`CompactReporter` if stdout is a terminal, else `LogReporter`), call `report::run`, and save the returned cache (never after `--dry-run`).
+  2. Otherwise, load configuration (auto-detect path) and the cache, pick a reporter (`JsonReporter` with `--json`, else `CompactReporter` if stdout is a terminal, else `LogReporter`), call `report::run`, and save the returned cache (never after `--dry-run`).
 
 ### Configuration agent
 
@@ -71,6 +72,7 @@ This document explains the intent of Asimeow, the key behaviours exposed via its
 - `run(config, &Options, &mut dyn Reporter)`: runs `scan` on a scoped thread and feeds events to the reporter as they arrive; calls `tick` about every 80 ms and `finish` with the `Summary`.
 - `Reporter` trait: `event`, `tick` (optional), `finish`.
 - `LogReporter`: plain lines with absolute paths, errors to stderr, final `summary: key=value` line.
+- `JsonReporter`: one `serde_json` object on stdout and nothing else: the summary counts, `changed` (`path`, `rule`, `kind` = `new`/`recreated`), `failures` and `warnings`. Field names match the `key=value` line; `--visual` cannot be combined with it.
 - `CompactReporter`: redraws one status line in place (spinner, folder count or `sizing n/m`, current folder, cut to the terminal width), prints changes above it, replaces it with a short summary plus a savings line. Colors are 16-color ANSI and honor `NO_COLOR`.
 - `stats(cache, now, home)`: the text of `asimeow stats` (total, last scan, 10 largest folders).
 

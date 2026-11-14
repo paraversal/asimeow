@@ -96,6 +96,9 @@ The executable will be available at `target/release/asimeow`.
 # Show what would be excluded without changing anything
 ./asimeow --dry-run
 
+# One JSON object on stdout, for scripts and notifications
+./asimeow --json
+
 # Full-screen view: progress, space saved and the excluded folders by size
 ./asimeow --visual
 
@@ -339,7 +342,23 @@ summary: folders=21967 exclusions=77 new=2 recreated=1 failed=0 unreadable=2 exc
 
 Failures (`❌`) and warnings (`⚠️`) go to stderr. The exit code is 1 if any folder could not be excluded.
 
-The output uses:
+Add `--json` for a single object on stdout instead of the lines. Nothing else is printed:
+warnings and failures are fields, and the exit code is still 1 if a folder could not be excluded.
+`--json` cannot be combined with `--visual`.
+
+```json
+{"folders":21967,"exclusions":77,"new":2,"recreated":1,"failed":0,"unreadable":2,
+ "excluded_bytes":2903197910,"new_bytes":668000000,"measured":3,
+ "previous_bytes":2615197910,"seconds":0.42,"dry_run":false,
+ "changed":[{"path":"/Users/user/works/projects/my-rust-project/target","rule":"rust","kind":"new"}],
+ "failures":[],"warnings":[]}
+```
+
+`new` includes `recreated`; `changed` lists only new and recreated folders, with `kind` set to
+`"new"` or `"recreated"`. The field names match the `key=value` summary line, so one parser can
+handle either output mode.
+
+The text output uses:
 - ✅ Folder newly excluded from Time Machine (or that would be, with `--dry-run`)
 - 🟡 Folder already excluded (listed with `-v`)
 - ❌ Folder that could not be excluded
