@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `recommend --apply` replaced a symlinked config (e.g. one stowed from a dotfiles repo)
+  with a plain file. It now writes to the file the link points at; the `.bak` stays next
+  to the link.
+
 ### Added
 - `--json`: one JSON object on stdout instead of the human output, for scripts and
   notifications. It carries the counts from the summary line plus `changed` (path, rule,

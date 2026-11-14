@@ -461,10 +461,13 @@ pub fn apply(report: &Report, config_path: &Path, dry_run: bool) -> Result<Appli
         let backup = config_path.with_extension("yaml.bak");
         fs::write(&backup, &text)
             .with_context(|| format!("Failed to write {}", backup.display()))?;
-        let tmp = config_path.with_extension("yaml.tmp");
+        // Write to the file a symlinked config points at (e.g. a dotfiles checkout), so
+        // the rename replaces that file instead of the link.
+        let target = fs::canonicalize(config_path).unwrap_or_else(|_| config_path.to_path_buf());
+        let tmp = target.with_extension("yaml.tmp");
         fs::write(&tmp, &edited).with_context(|| format!("Failed to write {}", tmp.display()))?;
-        fs::rename(&tmp, config_path)
-            .with_context(|| format!("Failed to write {}", config_path.display()))?;
+        fs::rename(&tmp, &target)
+            .with_context(|| format!("Failed to write {}", target.display()))?;
         applied.backup = Some(backup);
     }
 

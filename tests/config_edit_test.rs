@@ -149,3 +149,32 @@ fn test_recommend_apply_dry_run_then_for_real() -> Result<()> {
     assert!(again.suggestions.is_empty(), "nothing left to suggest");
     Ok(())
 }
+
+#[test]
+fn test_recommend_apply_writes_through_a_symlinked_config() -> Result<()> {
+    let temp_dir = tempdir()?;
+    let project = temp_dir.path().join("tests-project");
+    fs::create_dir_all(project.join(".pytest_cache"))?;
+    File::create(project.join("requirements.txt"))?;
+    // The real file lives elsewhere (a dotfiles checkout); the config path is a link.
+    let real = temp_dir.path().join("dotfiles").join("config.yaml");
+    fs::create_dir_all(real.parent().unwrap())?;
+    let text = format!(
+        "roots:\n- path: {}\nrules:\n- name: python\n  file_match: requirements.txt\n  exclusions:\n  - .venv\n",
+        project.display()
+    );
+    fs::write(&real, &text)?;
+    let link = temp_dir.path().join("config.yaml");
+    std::os::unix::fs::symlink(&real, &link)?;
+
+    let config: Config = serde_yaml::from_str(&text)?;
+    let report = recommend(&config, &catalog(), 2, None)?;
+    recommend::apply(&report, &link, false)?;
+
+    assert!(fs::symlink_metadata(&link)?.file_type().is_symlink(), "link survives");
+    let updated: Config = serde_yaml::from_str(&fs::read_to_string(&real)?)?;
+    assert_eq!(updated.rules[0].exclusions, vec![".venv", ".pytest_cache"]);
+    assert!(link.with_extension("yaml.bak").exists(), "backup next to the link");
+    assert!(!real.with_extension("yaml.bak").exists(), "nothing extra in the checkout");
+    Ok(())
+}
