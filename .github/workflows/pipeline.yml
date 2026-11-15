@@ -11,22 +11,29 @@ env:
   CARGO_TERM_COLOR: always
   BINARY_NAME: asimeow
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3.7.0
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: actions-rs/toolchain@16499b5e05bf2e26879000db0c1d13f7e13fa3af # v1.0.7
         with:
           profile: minimal
           toolchain: stable
           override: true
 
       - name: Cache dependencies
-        uses: actions/cache@v3
+        # Skip the cache on release tag builds so a poisoned cache can't reach a release.
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/cache@6f8efc29b200d32929f49075959781ed54ec270c # v3.5.0 # zizmor: ignore[cache-poisoning]
         with:
           path: |
             ~/.cargo/registry
@@ -35,18 +42,18 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run tests
-        uses: actions-rs/cargo@v1
+        uses: actions-rs/cargo@844f36862e911db73fe0815f00a4a2602c279505 # v1.0.3
         with:
           command: test
 
       - name: Check formatting
-        uses: actions-rs/cargo@v1
+        uses: actions-rs/cargo@844f36862e911db73fe0815f00a4a2602c279505 # v1.0.3
         with:
           command: fmt
           args: --all -- --check
 
       - name: Run clippy
-        uses: actions-rs/cargo@v1
+        uses: actions-rs/cargo@844f36862e911db73fe0815f00a4a2602c279505 # v1.0.3
         with:
           command: clippy
           args: -- -D warnings
@@ -60,10 +67,12 @@ jobs:
       matrix:
         target: [x86_64-apple-darwin, aarch64-apple-darwin]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3.7.0
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: actions-rs/toolchain@16499b5e05bf2e26879000db0c1d13f7e13fa3af # v1.0.7
         with:
           profile: minimal
           toolchain: stable
@@ -71,7 +80,7 @@ jobs:
           override: true
 
       - name: Build release binary
-        uses: actions-rs/cargo@v1
+        uses: actions-rs/cargo@844f36862e911db73fe0815f00a4a2602c279505 # v1.0.3
         with:
           command: build
           args: --release --target ${{ matrix.target }}
@@ -82,7 +91,7 @@ jobs:
           cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }} release/${{ env.BINARY_NAME }}
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ env.BINARY_NAME }}-${{ matrix.target }}
           path: release/${{ env.BINARY_NAME }}
@@ -94,17 +103,19 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3.7.0
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: actions-rs/toolchain@16499b5e05bf2e26879000db0c1d13f7e13fa3af # v1.0.7
         with:
           profile: minimal
           toolchain: stable
           override: true
 
       - name: Publish to crates.io
-        uses: actions-rs/cargo@v1
+        uses: actions-rs/cargo@844f36862e911db73fe0815f00a4a2602c279505 # v1.0.3
         with:
           command: publish
           args: --token ${{ secrets.CRATES_IO_TOKEN }}
@@ -117,14 +128,16 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3.7.0
+        with:
+          persist-credentials: false
 
       - name: Get version from tag
         id: get_version
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: release
 
@@ -139,7 +152,7 @@ jobs:
           done
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v0.1.15
         with:
           name: Release v${{ steps.get_version.outputs.VERSION }}
           draft: false
@@ -180,21 +193,23 @@ jobs:
         id: version
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
-            echo "Using manually provided version: ${{ github.event.inputs.version }}"
+            echo "VERSION=${GITHUB_EVENT_INPUTS_VERSION}" >> $GITHUB_OUTPUT
+            echo "Using manually provided version: ${GITHUB_EVENT_INPUTS_VERSION}"
           else
             VERSION=${GITHUB_REF#refs/tags/v}
             echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
             echo "Using version from tag: $VERSION"
           fi
+        env:
+          GITHUB_EVENT_INPUTS_VERSION: ${{ github.event.inputs.version }}
 
       - name: Check if assets exist
         id: check_assets
         run: |
-          VERSION=${{ steps.version.outputs.VERSION }}
+          VERSION=${STEPS_VERSION_OUTPUTS_VERSION}
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" https://github.com/${{ github.repository }}/releases/download/v$VERSION/asimeow-x86_64-apple-darwin.zip)
           
-          if [ "$HTTP_CODE" == "200" ] ||  [ "$HTTP_CODE" == "302" ] ||  [ "${{ github.event.inputs.force_update }}" == "true" ]; then
+          if [ "$HTTP_CODE" == "200" ] ||  [ "$HTTP_CODE" == "302" ] ||  [ "${GITHUB_EVENT_INPUTS_FORCE_UPDATE}" == "true" ]; then
             echo "ASSETS_EXIST=true" >> $GITHUB_OUTPUT
             echo "Assets exist or force update enabled, proceeding with formula update"
           else
@@ -202,12 +217,15 @@ jobs:
             echo "Assets don't exist for version v$VERSION, aborting"
             exit 1
           fi
+        env:
+          STEPS_VERSION_OUTPUTS_VERSION: ${{ steps.version.outputs.VERSION }}
+          GITHUB_EVENT_INPUTS_FORCE_UPDATE: ${{ github.event.inputs.force_update }}
 
       - name: Download release assets and compute SHA256
         id: sha256
         if: steps.check_assets.outputs.ASSETS_EXIST == 'true'
         run: |
-          VERSION=${{ steps.version.outputs.VERSION }}
+          VERSION=${STEPS_VERSION_OUTPUTS_VERSION}
           
           # Download each asset and compute SHA256
           mkdir -p tmp
@@ -223,21 +241,24 @@ jobs:
           # Export SHA256 values
           echo "MACOS_ARM64_SHA256=$MACOS_ARM64_SHA256" >> $GITHUB_OUTPUT
           echo "MACOS_X86_SHA256=$MACOS_X86_SHA256" >> $GITHUB_OUTPUT
+        env:
+          STEPS_VERSION_OUTPUTS_VERSION: ${{ steps.version.outputs.VERSION }}
 
       - name: Checkout homebrew tap
         if: steps.check_assets.outputs.ASSETS_EXIST == 'true'
-        uses: actions/checkout@v3
+        uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3.7.0
         with:
           repository: mdnmdn/homebrew-asimeow
           token: ${{ secrets.TAP_REPO_TOKEN }}
           path: homebrew-asimeow
+          persist-credentials: true # zizmor: ignore[artipacked] needed for the git push below
 
       - name: Update formula
         if: steps.check_assets.outputs.ASSETS_EXIST == 'true'
         run: |
-          VERSION=${{ steps.version.outputs.VERSION }}
-          MACOS_ARM64_SHA256=${{ steps.sha256.outputs.MACOS_ARM64_SHA256 }}
-          MACOS_X86_SHA256=${{ steps.sha256.outputs.MACOS_X86_SHA256 }}
+          VERSION=${STEPS_VERSION_OUTPUTS_VERSION}
+          MACOS_ARM64_SHA256=${STEPS_SHA256_OUTPUTS_MACOS_ARM64_SHA256}
+          MACOS_X86_SHA256=${STEPS_SHA256_OUTPUTS_MACOS_X86_SHA256}
           
           cd homebrew-asimeow
           
@@ -280,6 +301,10 @@ jobs:
             end
           end
           EOF
+        env:
+          STEPS_VERSION_OUTPUTS_VERSION: ${{ steps.version.outputs.VERSION }}
+          STEPS_SHA256_OUTPUTS_MACOS_ARM64_SHA256: ${{ steps.sha256.outputs.MACOS_ARM64_SHA256 }}
+          STEPS_SHA256_OUTPUTS_MACOS_X86_SHA256: ${{ steps.sha256.outputs.MACOS_X86_SHA256 }}
 
       - name: Commit and push changes
         if: steps.check_assets.outputs.ASSETS_EXIST == 'true'
@@ -288,14 +313,19 @@ jobs:
           git config user.name "GitHub Action"
           git config user.email "action@github.com"
           git add Formula/asimeow.rb
-          git commit -m "Update formula to v${{ steps.version.outputs.VERSION }}"
+          git commit -m "Update formula to v${STEPS_VERSION_OUTPUTS_VERSION}"
           git push
+        env:
+          STEPS_VERSION_OUTPUTS_VERSION: ${{ steps.version.outputs.VERSION }}
 
       - name: Set output status
         if: always()
         run: |
-          if [ "${{ steps.check_assets.outputs.ASSETS_EXIST }}" == "true" ]; then
-            echo "✅ Formula updated successfully to version ${{ steps.version.outputs.VERSION }}"
+          if [ "${STEPS_CHECK_ASSETS_OUTPUTS_ASSETS_EXIST}" == "true" ]; then
+            echo "✅ Formula updated successfully to version ${STEPS_VERSION_OUTPUTS_VERSION}"
           else
-            echo "❌ Failed to update formula. Assets don't exist for version ${{ steps.version.outputs.VERSION }}"
+            echo "❌ Failed to update formula. Assets don't exist for version ${STEPS_VERSION_OUTPUTS_VERSION}"
           fi
+        env:
+          STEPS_CHECK_ASSETS_OUTPUTS_ASSETS_EXIST: ${{ steps.check_assets.outputs.ASSETS_EXIST }}
+          STEPS_VERSION_OUTPUTS_VERSION: ${{ steps.version.outputs.VERSION }}
